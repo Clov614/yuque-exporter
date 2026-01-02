@@ -8,6 +8,12 @@ import PyInstaller.__main__
 import shutil
 from pathlib import Path
 
+import sys
+import io
+
+# 强制 stdout 使用 utf-8 编码，防止 GitHub Actions Windows Runner 报 UnicodeEncodeError
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 def build():
     print("🚀 开始构建 Yuque Exporter...")
     
