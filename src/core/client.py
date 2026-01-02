@@ -92,6 +92,14 @@ class YuqueClient:
         try:
             # 1. 发起导出请求
             response = self._request_api("POST", url, json=payload)
+            
+            # 特殊处理：未发布文档
+            if response and response.get('status') == 400:
+                msg = response.get('message', '')
+                if "请发布后再导出" in msg:
+                    print(f"⚠️ 文档未发布: {doc.title}，将创建空文件")
+                    return "EMPTY_DOC"
+            
             if not response:
                 return None
             
@@ -122,22 +130,60 @@ class YuqueClient:
             print(f"❌ 导出文档异常: {e}")
             return None
 
-    def download_file(self, url: str, save_path: str) -> bool:
-        """下载文件"""
+    def download_file(
+        self, 
+        url: str, 
+        save_path: str, 
+        progress_callback: Optional[Any] = None
+    ) -> bool:
+        """
+        下载文件
+        
+        Args:
+            url: 下载链接
+            save_path: 保存路径
+            progress_callback: 进度回调 (chunk_size, total_size)
+        """
         try:
-            # 使用 DrissionPage 下载，利用其优秀的下载管理
+            # 方案二：使用 requests 下载 (更稳定，易于控制进度和验证完整性)
+            browser_cookies = self.tab.cookies()
+            cookies = {c['name']: c['value'] for c in browser_cookies if 'name' in c and 'value' in c}
+            
+            headers = {
+                "User-Agent": self.tab.user_agent,
+                "Referer": "https://www.yuque.com/"
+            }
+            
+            response = requests.get(url, cookies=cookies, headers=headers, stream=True)
+            if response.status_code != 200:
+                print(f"❌ 下载请求失败: {response.status_code}")
+                return False
+            
+            total_size = int(response.headers.get('content-length', 0))
+            if progress_callback and total_size > 0:
+                progress_callback(0, total_size)
+            
             from pathlib import Path
             path_obj = Path(save_path)
-            self.tab.download(url, save_path=str(path_obj.parent), rename=path_obj.name)
             
-            # 等待文件出现 (简单超时机制)
-            for _ in range(60): 
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        if progress_callback:
+                            progress_callback(len(chunk), None)
+            
+            # 验证大小
+            if path_obj.exists() and path_obj.stat().st_size > 0:
+                return True
+            else:
+                print("❌ 下载文件为空")
                 if path_obj.exists():
-                    return True
-                time.sleep(1)
-            return False
+                    path_obj.unlink() # 删除空文件
+                return False
+            
         except Exception as e:
-            print(f"❌ 下载失败: {e}")
+            print(f"❌ 下载异常: {e}")
             return False
 
     def _request_api(self, method: str, url: str, **kwargs) -> Optional[Dict]:
@@ -168,6 +214,14 @@ class YuqueClient:
             
             if response.status_code == 200:
                 return response.json()
+            elif response.status_code == 400:
+                # 尝试解析错误信息
+                try:
+                    return response.json()
+                except:
+                    pass
+                print(f"API Error 400: {response.text[:100]}")
+                return None
             else:
                 print(f"API Error {response.status_code}: {response.text[:100]}")
                 return None

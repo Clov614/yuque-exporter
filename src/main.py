@@ -144,58 +144,157 @@ class Application:
             return
 
         # Group Filtering Option
-        # 简单实现：列出顶级分组供选择
-        top_level_nodes = [n for n in nodes if n.level == 0] # 假设 level 0 是顶级
-         # 更好的方式是通过 parent_uuid 为空判断顶级
-        # 但 nodes 数据里 parent_uuid 是什么？ models.py 里有
-        # 重新构建树结构逻辑太复杂，这里先做一个简单的询问：导出全部还是部分
-        
         export_scope = UI.ask_choice(
             f"关于 [{repo.name}]，您希望导出:",
-            ["全部文档", "选择特定分组/文档 (开发中，暂导出全部)"]
+            ["全部文档", "选择特定分级/文档"]
         )
         
-        target_docs = nodes # Default all
+        target_docs = []
+        
+        if export_scope == "全部文档":
+            target_docs = nodes
+        else:
+            # 构建节点树形展示列表
+            # 1. 整理层级关系
+            node_map = {n.uuid: n for n in nodes}
+            children_map = {}
+            roots = []
+            
+            for node in nodes:
+                children_map.setdefault(node.uuid, [])
+                if node.parent_uuid and node.parent_uuid in node_map:
+                    children_map.setdefault(node.parent_uuid, []).append(node)
+                else:
+                    roots.append(node)
+            
+            # 2. 递归生成选项表 (扁平化带缩进)
+            choices = []
+            
+            def add_nodes_to_choices(node_list, level=0):
+                # 排序: 标题优先 (TITLE) ? 还是按 default 顺序
+                # assuming node_list is already sorted by API or we sort them
+                # node_list.sort(key=lambda x: x.id) 
+                
+                for node in node_list:
+                    indent = "  " * level
+                    icon = "📂" if node.type == "TITLE" else "📄"
+                    display_name = f"{indent}{icon} {node.title}"
+                    
+                    choices.append({
+                        "name": display_name,
+                        "value": node,
+                        "checked": False
+                    })
+                    
+                    # Process children
+                    children = children_map.get(node.uuid, [])
+                    if children:
+                        add_nodes_to_choices(children, level + 1)
+
+            add_nodes_to_choices(roots)
+            
+            if not choices:
+                UI.warning("该知识库似乎为空")
+                return
+
+            # 3. 用户选择
+            UI.info("💡 提示: 选择[分组]会自动包含其下所有文档")
+            selected_nodes = UI.ask_checkbox(
+                "请选择要导出的内容 (支持多选):",
+                choices
+            )
+            
+            if not selected_nodes:
+                return
+                
+            # 4. 智能解析: 如果选中了父节点，自动包含所有子孙节点
+            # 使用集合避免重复
+            final_uuids = set()
+            
+            def collect_descendants(node):
+                final_uuids.add(node.uuid)
+                for child in children_map.get(node.uuid, []):
+                    collect_descendants(child)
+            
+            for node in selected_nodes:
+                collect_descendants(node)
+                
+            # 保持原始顺序导出
+            target_docs = [n for n in nodes if n.uuid in final_uuids]
+        
+        if not target_docs:
+            UI.warning("未包含任何有效文档")
+            return
         
         # Begin Export
         UI.info(f"开始导出 {len(target_docs)} 篇文档...")
         
         # 预计算路径映射
-        # 这里需要一个 path map helper, 暂时简化，直接 exporter 处理 relative_path
-        # Re-implement path mapping similar to prototype
         path_map = self._build_path_map(nodes)
         
         success_count = 0
         with UI.create_progress() as progress:
-            task = progress.add_task(f"导出 [{repo.name}]", total=len(target_docs))
+            main_task = progress.add_task(f"导出 [{repo.name}]", total=len(target_docs))
+            
+            # 创建下载任务 (隐藏，用于显示单个文件进度)
+            download_task = progress.add_task("等待下载...", total=None, visible=False)
             
             for doc in target_docs:
-                progress.update(task, description=f"处理: {doc.title}")
+                progress.update(main_task, description=f"处理: {doc.title}")
                 
                 # Calculate relative path
                 full_path_str = path_map.get(doc.uuid, "")
-                # If it's a TITLE node (group), just ensure directory exists
+                
                 if doc.type == "TITLE":
                     self.exporter.get_save_path(doc, repo.name, relative_path=full_path_str)
-                    progress.advance(task)
+                    progress.advance(main_task)
                     continue
                 
-                # Determine directory path (parent path)
-                # full_path_str includes the doc title itself usually in my logic logic?
-                # Let's check _build_path_map logic below
                 path_parts = full_path_str.split("/")
                 relative_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
                 
                 url = self.client.export_document(doc, export_type)
                 
+                # Determine extension
+                ext = f".{export_type.value}"
+                if export_type == ExportType.MARKDOWN:
+                    ext = ".md"
+
+                save_path = self.exporter.get_save_path(doc, repo.name, extension=ext, relative_path=relative_dir)
+
+                if url == "EMPTY_DOC":
+                    # 创建空文件
+                    # Ensure directory exists
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    save_path.touch()
+                    if export_type == ExportType.MARKDOWN:
+                        # 对于 Markdown，可以写入标题作为元数据，即使内容为空
+                        self.exporter.add_metadata(save_path, doc)
+                    success_count += 1
+                    progress.advance(main_task)
+                    continue
+
                 if url:
-                    save_path = self.exporter.get_save_path(doc, repo.name, extension=f".{export_type.value}", relative_path=relative_dir)
-                    if self.client.download_file(url, str(save_path)):
+                    # 定义回调函数
+                    def update_progress(chunk_size, total=None):
+                        progress.update(download_task, visible=True, description=f"⬇️ {doc.title[:15]}...")
+                        if total:
+                            progress.update(download_task, total=total)
+                        if chunk_size:
+                            progress.advance(download_task, chunk_size)
+                    
+                    # 重置下载任务
+                    progress.reset(download_task, total=None, visible=False)
+                    
+                    if self.client.download_file(url, str(save_path), progress_callback=update_progress):
                         if export_type == ExportType.MARKDOWN:
                             self.exporter.add_metadata(save_path, doc)
                         success_count += 1
+                    
+                    # 隐藏下载任务
+                    progress.update(download_task, visible=False)
                 
-                progress.advance(task)
+                progress.advance(main_task)
         
         UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(target_docs)}")
 
