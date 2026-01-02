@@ -49,6 +49,45 @@ class YuqueClient:
         adapter = HTTPAdapter(max_retries=retries)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
+        
+        self.auth = YuqueAuth()
+
+    def login(self) -> bool:
+        """
+        执行登录流程 (需在有头模式下调用)
+        """
+        print("请在浏览器中完成登录...")
+        
+        # 确保环境纯净：清除 Cookies 和 缓存
+        try:
+            # 使用 CDP 命令强力清除
+            self.tab.run_cdp("Network.clearBrowserCookies")
+            self.tab.run_cdp("Network.clearBrowserCache")
+        except Exception as e:
+            print(f"⚠️ 清理浏览器数据失败: {e}")
+
+        self.tab.get("https://www.yuque.com/login")
+        
+        # 等待登录成功 (轮询检查 URL 或 元素)
+        # 语雀登录成功后通常会跳转到 /dashboard 或 个人主页
+        max_wait = 300 # 5分钟
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait:
+            time.sleep(1)
+            try:
+                curr_url = self.tab.url
+                if "dashboard" in curr_url or "yuque.com/u/" in curr_url:
+                    # 登录成功
+                    # 额外等待一下确保 cookie 写入
+                    time.sleep(2)
+                    if self.auth.save_cookies(self.tab):
+                         return True
+            except:
+                pass
+                
+        print("❌ 登录超时")
+        return False
     
     def get_repositories(self) -> List[Repository]:
         """获取所有知识库"""

@@ -67,6 +67,7 @@ class Application:
             time.sleep(2)
             # 切换回无头模式
             self.page = self.browser_manager.restart_headless()
+            self.auth.load_cookies(self.page) # 关键修复：切换模式后重新注入 cookies
             self.client = YuqueClient(self.page)
         else:
             UI.error("登录失败")
