@@ -19,6 +19,9 @@ class ExportType(Enum):
     PDF = "pdf"
     LAKEBOOK = "lakebook" # Added based on common Yuque usage, though original only had 3
 
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 class YuqueClient:
     """
     语雀客户端 - 基于 DrissionPage
@@ -34,6 +37,18 @@ class YuqueClient:
             tab: DrissionPage 对象 (ChromiumPage or SessionPage)
         """
         self.tab = tab
+        
+        # 初始化 Session 并配置重试策略
+        self.session = requests.Session()
+        retries = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[500, 502, 503, 504, 429],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
     
     def get_repositories(self) -> List[Repository]:
         """获取所有知识库"""
@@ -78,15 +93,21 @@ class YuqueClient:
         self, 
         doc: Document, 
         export_type: ExportType = ExportType.MARKDOWN,
-        max_retries: int = 20
+        max_retries: int = 120
     ) -> Optional[str]:
         """导出文档，返回下载链接"""
         url = self.API_DOC_EXPORT.format(doc_id=doc.id)
         
+        options_str = ""
+        if export_type == ExportType.MARKDOWN:
+            options_str = json.dumps({"latexType": 1, "useMdai": 1})
+        elif export_type == ExportType.PDF:
+            options_str = json.dumps({"enableToc": 1})
+
         payload = {
             "type": export_type.value,
             "force": 0,
-            "options": json.dumps({"latexType": 1, "useMdai": 1}) if export_type == ExportType.MARKDOWN else ""
+            "options": options_str
         }
         
         try:
@@ -154,7 +175,7 @@ class YuqueClient:
                 "Referer": "https://www.yuque.com/"
             }
             
-            response = requests.get(url, cookies=cookies, headers=headers, stream=True)
+            response = self.session.get(url, cookies=cookies, headers=headers, stream=True, timeout=60)
             if response.status_code != 200:
                 print(f"❌ 下载请求失败: {response.status_code}")
                 return False
@@ -204,11 +225,12 @@ class YuqueClient:
             if 'headers' in kwargs:
                 headers.update(kwargs.pop('headers'))
             
-            response = requests.request(
+            response = self.session.request(
                 method, 
                 url, 
                 cookies=cookies, 
                 headers=headers, 
+                timeout=30, # 增加默认超时
                 **kwargs
             )
             
