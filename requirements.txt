@@ -1,0 +1,5 @@
+DrissionPage>=4.0
+requests
+rich
+questionary
+pyinstaller
