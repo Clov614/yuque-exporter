@@ -17,7 +17,7 @@ class ExportType(Enum):
     MARKDOWN = "markdown"
     WORD = "word"
     PDF = "pdf"
-    LAKEBOOK = "lakebook" # Added based on common Yuque usage, though original only had 3
+    LAKEBOOK = "lake" # Fixed: API requires "lake" instead of "lakebook"
 
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
