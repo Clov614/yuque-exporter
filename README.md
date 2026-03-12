@@ -61,6 +61,26 @@ python build.py
 
 构建产物将位于 `dist/YuqueExporter.exe`。
 
+## 分支说明：CLI Harness 独立版本
+
+为了支持自动化代理与机器消费，本仓库新增了一个独立改造分支：
+
+- `feat/cli-anything-yuque-harness-release`
+
+该分支包含：
+
+- `agent-harness/` 独立可安装包（`cli-anything-yuque`）
+- profile 状态目录与会话管理（`~/.yuque_harness/<profile>/`）
+- 统一 JSON envelope 输出与退出码映射
+- 分层测试（unit / mocked e2e / subprocess）
+
+如需体验该版本，请切换分支后安装：
+
+```bash
+git checkout feat/cli-anything-yuque-harness-release
+python -m pip install -e ./agent-harness
+```
+
 ## 开源协议
 
 MIT License
