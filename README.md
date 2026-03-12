@@ -61,6 +61,37 @@ python build.py
 
 构建产物将位于 `dist/YuqueExporter.exe`。
 
+## CLI Harness 独立版本（cli-anything-yuque）
+
+本分支新增了一个可状态化、可机器消费的独立 CLI harness：`cli-anything-yuque`。
+
+### 安装
+
+```bash
+python -m pip install -e ./agent-harness
+```
+
+### 常用命令
+
+```bash
+cli-anything-yuque --json project info
+cli-anything-yuque --json session init --profile default
+cli-anything-yuque auth login --profile default
+cli-anything-yuque repo list --profile default --json
+cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --profile default --json
+```
+
+### 测试
+
+```bash
+python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests
+```
+
+详细实现与测试记录见：
+- `HARNESS.md`
+- `agent-harness/YUQUE.md`
+- `agent-harness/cli_anything/yuque/tests/TEST.md`
+
 ## 开源协议
 
 MIT License
