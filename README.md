@@ -81,6 +81,122 @@ git checkout feat/cli-anything-yuque-harness-release
 python -m pip install -e ./agent-harness
 ```
 
+## Harness 指令总览（cli-anything-yuque）
+
+> 以下命令适用于 `feat/cli-anything-yuque-harness-release` 分支。
+
+### 1) 安装
+
+```bash
+python -m pip install -e ./agent-harness
+```
+
+### 2) 全局参数
+
+`cli-anything-yuque` 支持以下通用参数：
+
+- `--json`：输出统一 JSON envelope
+- `--profile <name>`：多账号/多配置隔离
+- `--output-dir <path>`：导出目录覆盖
+- `--verbose`：调试日志
+
+可用于根命令，也可用于子命令。
+
+```bash
+cli-anything-yuque --json project info
+cli-anything-yuque project info --json
+```
+
+### 3) project 命令组
+
+```bash
+cli-anything-yuque project info
+cli-anything-yuque project paths --profile default --json
+```
+
+- `project info`：项目与路径基础信息
+- `project paths`：当前 profile 的状态文件路径
+
+### 4) session 命令组
+
+```bash
+cli-anything-yuque session init --profile default --json
+cli-anything-yuque session show --profile default --json
+cli-anything-yuque session doctor --profile default --json
+```
+
+- `session init`：初始化/恢复 session
+- `session show`：查看当前 session
+- `session doctor`：环境与路径健康检查
+
+### 5) auth 命令组
+
+```bash
+cli-anything-yuque auth login --profile default
+cli-anything-yuque auth status --profile default --json
+cli-anything-yuque auth logout --profile default --json
+```
+
+- `auth login`：浏览器登录并刷新 cookies
+- `auth status`：查看登录态
+- `auth logout`：清理本地凭证
+
+### 6) repo 命令组
+
+```bash
+cli-anything-yuque repo list --profile default --json
+cli-anything-yuque repo tree --repo-id <repo_id> --profile default --json
+```
+
+- `repo list`：列出可访问知识库
+- `repo tree`：查看指定知识库目录结构
+
+### 7) export 命令组
+
+#### 单库导出
+
+```bash
+cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --profile default --json
+```
+
+或按节点导出：
+
+```bash
+cli-anything-yuque export run --repo-id <repo_id> --format markdown --node <node_uuid> --profile default --json
+```
+
+#### 批量导出
+
+```bash
+cli-anything-yuque export batch --repo-id <repo1> --repo-id <repo2> --format markdown --all --profile default --json
+```
+
+- `--format` 支持：`markdown | pdf | word | lake`
+- `export run/batch` 必须二选一：`--all` 或 `--node`
+
+### 8) JSON 输出与退出码约定
+
+成功 envelope：
+
+```json
+{"ok": true, "data": {}, "error": null, "meta": {}}
+```
+
+失败 envelope：
+
+```json
+{"ok": false, "data": null, "error": {"code": "...", "message": "..."}, "meta": {}}
+```
+
+退出码：
+
+- `0` 成功
+- `2` 参数错误
+- `3` 认证失败/会话过期
+- `4` 远端 API 错误
+- `5` 下载/文件系统错误
+- `6` 未知错误
+
 ## 开源协议
 
 MIT License
