@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List
 
 from cli_anything.yuque.core.export import ExportService
@@ -76,6 +77,10 @@ class FakeYuqueClient:
         Path(save_path).write_text("content", encoding="utf-8")
         return True
 
+    def download_external_image(self, _url: str, save_path: str | Path) -> bool:
+        Path(save_path).write_bytes(b"image")
+        return True
+
 
 class FakeExporter:
     def __init__(self, output_dir=None):
@@ -87,6 +92,17 @@ class FakeExporter:
             base = base / relative_path
         base.mkdir(parents=True, exist_ok=True)
         return base / f"{doc.title}{extension}"
+
+    def localize_images(self, filepath: Path, download_image):
+        asset_path = filepath.parent / f"{filepath.stem}.assets" / "image.png"
+        asset_path.parent.mkdir(parents=True, exist_ok=True)
+        assert download_image("https://images.example.test/image.png", asset_path)
+        return SimpleNamespace(
+            found_count=2,
+            downloaded_count=1,
+            failed_urls=("https://images.example.test/missing.png",),
+            skipped_count=0,
+        )
 
     def add_metadata(self, filepath: Path, _doc):
         if filepath.exists():
@@ -123,6 +139,33 @@ def test_export_service_run_all(monkeypatch, tmp_path: Path) -> None:
     assert result["success"] == 3
     assert captured["profile"] == "default"
     assert captured["event"]["event"] == "export.run"
+
+
+def test_export_service_reports_partial_image_localization(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("cli_anything.yuque.core.export.ProfileAuth", FakeProfileAuth)
+    monkeypatch.setattr("cli_anything.yuque.core.export.BrowserManager", FakeBrowserManager)
+    monkeypatch.setattr("cli_anything.yuque.core.export.YuqueClient", FakeYuqueClient)
+    monkeypatch.setattr("cli_anything.yuque.core.export.DocumentExporter", FakeExporter)
+    monkeypatch.setattr("cli_anything.yuque.core.export.append_audit", lambda *_a, **_k: {})
+
+    result = ExportService(profile="default", output_dir=str(tmp_path)).run(
+        repo_id=1,
+        fmt="markdown",
+        all_docs=False,
+        node_uuids=["doc1"],
+        download_images=True,
+    )
+
+    assert result["success"] == 1
+    assert result["image_localization"] == {
+        "enabled": True,
+        "found": 2,
+        "downloaded": 1,
+        "failed": 1,
+        "skipped": 0,
+    }
+    assert result["items"][0]["status"] == "ok"
+    assert result["items"][0]["image_localization"]["failed"] == 1
 
 
 def test_export_service_run_node_filter(monkeypatch, tmp_path: Path) -> None:

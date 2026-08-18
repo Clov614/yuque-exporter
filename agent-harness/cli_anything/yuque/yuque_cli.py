@@ -228,6 +228,12 @@ def export() -> None:
 @click.option("--format", "fmt", default="markdown")
 @click.option("--all", "all_docs", is_flag=True)
 @click.option("--node", "nodes", multiple=True)
+@click.option(
+    "--download-images",
+    is_flag=True,
+    default=False,
+    help="Download HTTP(S) Markdown images into local .assets directories",
+)
 @common_cmd_options
 @click.pass_context
 def export_run(
@@ -236,6 +242,7 @@ def export_run(
     fmt: str,
     all_docs: bool,
     nodes: Iterable[str],
+    download_images: bool,
     as_json: bool,
     profile: Optional[str],
     output_dir: Optional[str],
@@ -245,13 +252,20 @@ def export_run(
 
     def execute() -> Dict[str, Any]:
         validated_nodes = validate_node_values(nodes)
+        validated_format = validate_format(fmt)
         if not all_docs and not validated_nodes:
             raise click.BadParameter("use --all or at least one --node")
+        if download_images and validated_format != "markdown":
+            raise click.BadParameter(
+                "--download-images requires --format markdown",
+                param_hint="--download-images",
+            )
         return ExportService(_profile(ctx), _ctx_value(ctx, "output_dir")).run(
             repo_id=validate_repo_id(repo_id),
-            fmt=validate_format(fmt),
+            fmt=validated_format,
             all_docs=all_docs,
             node_uuids=validated_nodes,
+            download_images=download_images,
         )
 
     _run(ctx, execute)
@@ -262,6 +276,12 @@ def export_run(
 @click.option("--format", "fmt", default="markdown")
 @click.option("--all", "all_docs", is_flag=True)
 @click.option("--node", "nodes", multiple=True)
+@click.option(
+    "--download-images",
+    is_flag=True,
+    default=False,
+    help="Download HTTP(S) Markdown images into local .assets directories",
+)
 @common_cmd_options
 @click.pass_context
 def export_batch(
@@ -270,6 +290,7 @@ def export_batch(
     fmt: str,
     all_docs: bool,
     nodes: Iterable[str],
+    download_images: bool,
     as_json: bool,
     profile: Optional[str],
     output_dir: Optional[str],
@@ -279,13 +300,20 @@ def export_batch(
 
     def execute() -> Dict[str, Any]:
         validated_nodes = validate_node_values(nodes)
+        validated_format = validate_format(fmt)
         if not all_docs and not validated_nodes:
             raise click.BadParameter("use --all or at least one --node")
+        if download_images and validated_format != "markdown":
+            raise click.BadParameter(
+                "--download-images requires --format markdown",
+                param_hint="--download-images",
+            )
         return ExportService(_profile(ctx), _ctx_value(ctx, "output_dir")).batch(
             repo_ids=[validate_repo_id(v) for v in repo_ids],
-            fmt=validate_format(fmt),
+            fmt=validated_format,
             all_docs=all_docs,
             node_uuids=validated_nodes,
+            download_images=download_images,
         )
 
     _run(ctx, execute)

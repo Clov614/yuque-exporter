@@ -93,8 +93,9 @@ agent-harness/
    - `repo tree --repo-id <id>`
 
 3. `export`
-   - `export run --repo-id <id> --format markdown|pdf|word|lake [--all | --node <uuid> ...]`
-   - `export batch --repo-id <id>...`
+   - `export run --repo-id <id> --format markdown|pdf|word|lake [--all | --node <uuid> ...] [--download-images]`
+   - `export batch --repo-id <id>... [--download-images]`
+   - `--download-images` 默认关闭且仅适用于 Markdown；图片部分失败不改变文档导出状态
 
 4. `session`
    - `session init`
@@ -186,6 +187,8 @@ agent-harness/
 
 - 不在日志打印敏感 cookie/token。
 - 错误信息不得泄露完整响应头/凭证。
+- 外部图片使用独立、无语雀 Cookie 的 Session，并拒绝本机/私网/保留地址。
+- 图片响应必须为 `image/*` 且不超过 20 MiB；每篇文档最多处理 100 个唯一图片 URL、累计 100 MiB、约 5 分钟；单张下载有整体时间截止；失败时清理临时文件并保留原 URL。
 - 本地凭证文件权限应最小化（用户可读写）。
 - 仅用于用户授权账户与知识库导出。
 

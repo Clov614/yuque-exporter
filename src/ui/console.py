@@ -71,6 +71,27 @@ class UI:
                     return None
 
     @staticmethod
+    def ask_confirm(message: str, default: bool = False) -> bool:
+        """询问是否启用可选功能，非交互环境默认保持关闭。"""
+        try:
+            answer = questionary.confirm(message, default=default).ask()
+            return default if answer is None else bool(answer)
+        except Exception:
+            suffix = "Y/n" if default else "y/N"
+            while True:
+                try:
+                    value = input(f"{message} [{suffix}]: ").strip().lower()
+                    if not value:
+                        return default
+                    if value in {"y", "yes", "是"}:
+                        return True
+                    if value in {"n", "no", "否"}:
+                        return False
+                    console.print("[red]❌ 请输入 y 或 n[/red]")
+                except (KeyboardInterrupt, EOFError):
+                    return default
+
+    @staticmethod
     def ask_checkbox(message: str, choices: List[dict]) -> List[Any]:
         """
         多选框

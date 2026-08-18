@@ -9,6 +9,7 @@
 - 🚀 **高效运行**: 默认使用无头模式运行，仅在登录时调用图形界面。
 - 🍪 **持久化登录**: 自动保存会话，无需频繁扫描二维码。
 - 🌳 **目录保持**: 完美还原语雀知识库的目录层级结构。
+- 🖼️ **离线图片**: 可选将 Markdown 网络图片下载到文档旁的 `.assets` 目录。
 - 🖥️ **交互式 CLI**: 简单易用的命令行菜单界面。
 
 ## 📥 下载与安装
@@ -43,12 +44,25 @@
 2. 程序会列出您所有可访问的知识库。
 3. **选择知识库**: 使用 `空格键` 选中一个或多个知识库，`回车键` 确认。
 4. **选择格式**: 支持 `Markdown` (推荐)、`PDF`、`Word`、`Lakebook`。
-5. **选择范围**:
+5. **下载网络图片（仅 Markdown）**: 按需选择是否将 HTTP/HTTPS 图片保存到本地；默认关闭。
+6. **选择范围**:
    - **全部文档**: 导出整个知识库。
    - **选择特定分级**: 浏览目录树，按需选择特定文件夹或文档导出。
 
+启用图片下载后，每篇文档使用独立资源目录：
+
+```text
+yuque_export/
+└── 知识库/
+    ├── 示例文档.md
+    └── 示例文档.assets/
+        └── diagram-a1b2c3d4e5.png
+```
+
+当前支持标准 inline 图片语法，例如 `![说明](https://example.com/image.png)`。图片下载失败时保留原网络 URL，不影响 Markdown 文档本身导出；相对路径、`data:`、reference-style 和 HTML 图片不会被改写。每篇文档最多处理 100 个唯一图片 URL，图片累计最多 100 MiB、处理时间最多约 5 分钟，单张图片最大 20 MiB。
+
 ### 3. 查看结果
-导出完成后，文件将保存在程序同级目录下的 `download/` 文件夹中，并保持原有的目录层级结构。
+导出完成后，文件将保存在运行程序时的当前工作目录下的 `yuque_export/` 文件夹中，并保持原有目录层级结构。
 
 ## 构建
 
@@ -61,29 +75,15 @@ python build.py
 
 构建产物将位于 `dist/YuqueExporter.exe`。
 
-## 分支说明：CLI Harness 独立版本
+## 自动化 CLI Harness
 
-为了支持自动化代理与机器消费，本仓库新增了一个独立改造分支：
-
-- `feat/cli-anything-yuque-harness-release`
-
-该分支包含：
-
-- `agent-harness/` 独立可安装包（`cli-anything-yuque`）
-- profile 状态目录与会话管理（`~/.yuque_harness/<profile>/`）
-- 统一 JSON envelope 输出与退出码映射
-- 分层测试（unit / mocked e2e / subprocess）
-
-如需体验该版本，请切换分支后安装：
+`main` 分支同时包含 `agent-harness/` 独立可安装包（`cli-anything-yuque`），用于自动化代理和机器消费。它提供 profile 状态管理、统一 JSON envelope、明确退出码和分层测试。
 
 ```bash
-git checkout feat/cli-anything-yuque-harness-release
 python -m pip install -e ./agent-harness
 ```
 
 ## Harness 指令总览（cli-anything-yuque）
-
-> 以下命令适用于 `feat/cli-anything-yuque-harness-release` 分支。
 
 ### 1) 安装
 
@@ -159,6 +159,12 @@ cli-anything-yuque repo tree --repo-id <repo_id> --profile default --json
 cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --profile default --json
 ```
 
+如需离线图片，在 Markdown 导出命令中加入 `--download-images`：
+
+```bash
+cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --download-images --profile default --json
+```
+
 或按节点导出：
 
 ```bash
@@ -173,6 +179,7 @@ cli-anything-yuque export batch --repo-id <repo1> --repo-id <repo2> --format mar
 
 - `--format` 支持：`markdown | pdf | word | lake`
 - `export run/batch` 必须二选一：`--all` 或 `--node`
+- `--download-images` 默认关闭且仅可与 `--format markdown` 同时使用；JSON 结果会返回 `image_localization` 汇总
 
 ### 8) JSON 输出与退出码约定
 

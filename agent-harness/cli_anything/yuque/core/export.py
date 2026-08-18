@@ -36,7 +36,11 @@ class ExportService:
         fmt: str,
         all_docs: bool,
         node_uuids: Iterable[str],
+        download_images: bool = False,
     ) -> Dict[str, Any]:
+        if download_images and fmt != "markdown":
+            raise ValueError("download_images requires markdown format")
+
         auth = ProfileAuth(self.profile)
         auth._sync_profile_to_legacy()
         manager = BrowserManager()
@@ -57,6 +61,13 @@ class ExportService:
             export_type = FORMAT_TO_EXPORT_TYPE[fmt]
 
             exported = []
+            image_summary = {
+                "enabled": download_images,
+                "found": 0,
+                "downloaded": 0,
+                "failed": 0,
+                "skipped": 0,
+            }
             path_map = _build_path_map(nodes)
             for doc in selected:
                 full_path = path_map.get(doc.uuid, "")
@@ -82,15 +93,38 @@ class ExportService:
                     continue
 
                 ok = client.download_file(url, str(save_path))
+                item = {
+                    "doc": asdict(doc),
+                    "status": "ok" if ok else "failed",
+                    "path": str(save_path),
+                }
                 if ok and fmt == "markdown":
+                    if download_images:
+                        image_result = exporter.localize_images(
+                            save_path, client.download_external_image
+                        )
+                        item["image_localization"] = {
+                            "found": image_result.found_count,
+                            "downloaded": image_result.downloaded_count,
+                            "failed": len(image_result.failed_urls),
+                            "skipped": image_result.skipped_count,
+                        }
+                        image_summary = {
+                            **image_summary,
+                            "found": image_summary["found"] + image_result.found_count,
+                            "downloaded": image_summary["downloaded"] + image_result.downloaded_count,
+                            "failed": image_summary["failed"] + len(image_result.failed_urls),
+                            "skipped": image_summary["skipped"] + image_result.skipped_count,
+                        }
                     exporter.add_metadata(save_path, doc)
-                exported.append({"doc": asdict(doc), "status": "ok" if ok else "failed", "path": str(save_path)})
+                exported.append(item)
 
             summary = {
                 "repo": asdict(repo),
                 "format": fmt,
                 "requested": len(selected),
                 "success": len([x for x in exported if x["status"] in {"ok", "empty", "directory"}]),
+                "image_localization": image_summary,
                 "items": exported,
             }
             append_audit(
@@ -107,9 +141,22 @@ class ExportService:
         finally:
             manager.quit()
 
-    def batch(self, repo_ids: Iterable[int], fmt: str, all_docs: bool, node_uuids: Iterable[str]) -> Dict[str, Any]:
+    def batch(
+        self,
+        repo_ids: Iterable[int],
+        fmt: str,
+        all_docs: bool,
+        node_uuids: Iterable[str],
+        download_images: bool = False,
+    ) -> Dict[str, Any]:
         results = [
-            self.run(repo_id=r, fmt=fmt, all_docs=all_docs, node_uuids=node_uuids)
+            self.run(
+                repo_id=r,
+                fmt=fmt,
+                all_docs=all_docs,
+                node_uuids=node_uuids,
+                download_images=download_images,
+            )
             for r in repo_ids
         ]
         return {

@@ -13,6 +13,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from core.client import YuqueClient, ExportType
 from core.auth import YuqueAuth, LoginStatus
+from core.models import Repository
 from core.exporter import DocumentExporter
 from utils.browser import BrowserManager
 from ui.console import UI
@@ -127,13 +128,25 @@ class Application:
             "Lakebook": ExportType.LAKEBOOK
         }
         fmt_choice = UI.ask_choice("选择导出格式:", list(format_map.keys()))
+        if fmt_choice not in format_map:
+            return
         export_type = format_map[fmt_choice]
-        
+        download_images = False
+        if export_type == ExportType.MARKDOWN:
+            download_images = UI.ask_confirm(
+                "是否将 Markdown 中的网络图片下载到本地？", default=False
+            )
+
         # Process each repo
         for repo in selected_repos:
-            self.process_repo_export(repo, export_type)
+            self.process_repo_export(repo, export_type, download_images=download_images)
 
-    def process_repo_export(self, repo, export_type):
+    def process_repo_export(
+        self,
+        repo: Repository,
+        export_type: ExportType,
+        download_images: bool = False,
+    ) -> None:
         """处理单个知识库导出"""
         UI.info(f"正在分析知识库: {repo.name}")
         
@@ -234,6 +247,8 @@ class Application:
         path_map = self._build_path_map(nodes)
         
         success_count = 0
+        image_downloaded_count = 0
+        image_failed_count = 0
         with UI.create_progress() as progress:
             main_task = progress.add_task(f"导出 [{repo.name}]", total=len(target_docs))
             
@@ -289,6 +304,12 @@ class Application:
                     
                     if self.client.download_file(url, str(save_path), progress_callback=update_progress):
                         if export_type == ExportType.MARKDOWN:
+                            if download_images:
+                                image_result = self.exporter.localize_images(
+                                    save_path, self.client.download_external_image
+                                )
+                                image_downloaded_count += image_result.downloaded_count
+                                image_failed_count += len(image_result.failed_urls)
                             self.exporter.add_metadata(save_path, doc)
                         success_count += 1
                     
@@ -298,6 +319,10 @@ class Application:
                 progress.advance(main_task)
         
         UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(target_docs)}")
+        if download_images:
+            UI.info(
+                f"图片本地化: 成功 {image_downloaded_count} 张，失败 {image_failed_count} 张"
+            )
 
     def _build_path_map(self, nodes):
         """构建 uuid -> full_path string 映射"""

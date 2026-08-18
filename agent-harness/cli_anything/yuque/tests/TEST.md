@@ -22,6 +22,14 @@
    - `project info` JSON envelope + rc 0
    - `project paths` JSON envelope + rc 0
    - Parameter error returns rc 2 + JSON failure envelope
+4. `test_image_localization.py`
+   - Inline HTTP/HTTPS 图片改写、URL 去重、稳定文件名和失败保留
+   - 忽略相对图片、非 HTTP scheme 与 fenced code block
+5. `test_external_image_download.py`
+   - 无认证 Session、URL/IP 安全校验、Content-Type/大小限制和临时文件清理
+6. `test_cli_download_images.py`
+   - `export run/batch --download-images` 参数传递
+   - 非 Markdown 格式返回参数错误
 
 ---
 
@@ -61,8 +69,8 @@
 1. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests/test_core.py`
    - ✅ 6 passed
 2. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests/test_full_e2e.py`
-   - ✅ 2 passed
+   - ✅ 3 passed
 3. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests/test_subprocess.py`
    - ✅ 3 passed
-4. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests`
-   - ✅ 11 passed
+4. `PYTHONPATH=agent-harness python -m pytest agent-harness/cli_anything/yuque/tests -q`
+   - ✅ 34 passed
