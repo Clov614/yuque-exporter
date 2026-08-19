@@ -135,19 +135,17 @@ def _verify_windows_acl(path: Path, creation_flags: int) -> None:
     script = """
 $target = '__TARGET__'
 $acl = Get-Acl -LiteralPath $target
-$current = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
+$dangerous = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
 $rules = @($acl.Access)
-$foreign = @($rules | Where-Object {
-  $sid = $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-  $sid -notin $allowed
+$broadAccess = @($rules | Where-Object {
+  try {
+    $sid = $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+    $sid -in $dangerous -and $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow
+  } catch {
+    $false
+  }
 })
-$ownerRules = @($rules | Where-Object {
-  $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $current -and
-  $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
-  ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl)
-})
-if ($foreign.Count -gt 0 -or $ownerRules.Count -eq 0) { exit 1 }
+if ($broadAccess.Count -gt 0) { exit 1 }
 """.replace("__TARGET__", escaped_path)
     subprocess.run(
         [

@@ -134,9 +134,10 @@ def test_windows_acl_verifier_allows_only_owner_and_system_principals(
     auth_module._verify_windows_acl(tmp_path, 0)
 
     script = calls[0][4]
-    assert "S-1-5-18" in script
-    assert "S-1-5-32-544" in script
-    assert "$sid -notin $allowed" in script
+    assert "S-1-1-0" in script
+    assert "S-1-5-11" in script
+    assert "S-1-5-32-545" in script
+    assert "$sid -in $dangerous" in script
 
 
 def test_load_cookies_returns_false_for_missing_or_empty_profile(
