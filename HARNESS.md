@@ -89,7 +89,7 @@ agent-harness/
    - `auth logout`（清理本地凭证）
 
 2. `repo`
-   - `repo list`（当前常用知识库列表，不等同于收藏列表）
+   - `repo list [--source common|favorites]`（默认 common；favorites 仅识别明确的知识库收藏卡片）
    - `repo tree --repo-id <id>` 或 `repo tree --repo <owner/slug|Yuque URL>`
 
 3. `export`

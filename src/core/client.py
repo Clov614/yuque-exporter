@@ -26,6 +26,7 @@ from .repository_resolver import (
     RepositoryTransportError,
 )
 from .download_support import ExportDownloadMixin
+from .favorite_repository_provider import FavoriteRepositoryProvider
 
 class ExportType(Enum):
     """文档导出格式"""
@@ -115,6 +116,7 @@ class YuqueClient(ExportDownloadMixin):
     
     BASE_URL = "https://www.yuque.com"
     API_COMMON_USED = "https://www.yuque.com/api/mine/common_used"
+    FAVORITES_PAGE = "https://www.yuque.com/dashboard/collections"
     API_DOC_EXPORT = "https://www.yuque.com/api/docs/{doc_id}/export"
     DEFAULT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
     DEFAULT_EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
@@ -211,6 +213,14 @@ class YuqueClient(ExportDownloadMixin):
             else RepositoryReference.parse(reference)
         )
         return RepositoryResolver(self._request_repository).resolve(parsed_reference)
+
+    def get_favorite_repositories(self) -> List[Repository]:
+        """获取收藏页中明确标记为 Book 的知识库。"""
+        provider = FavoriteRepositoryProvider(
+            self._request_favorite_resource,
+            self.FAVORITES_PAGE,
+        )
+        return provider.list_repositories()
 
     def get_repositories(self) -> List[Repository]:
         """获取常用知识库列表。"""
@@ -508,6 +518,55 @@ class YuqueClient(ExportDownloadMixin):
             timeout=(timeout_seconds, timeout_seconds),
             allow_redirects=False,
         )
+
+    def _request_favorite_resource(self, url: str) -> RepositoryHttpResult:
+        """Read favorites HTML/JSON with a strict response-size bound."""
+        max_bytes = FavoriteRepositoryProvider.MAX_HTML_BYTES
+        cookies = self._yuque_cookies(self.tab.cookies(), url)
+        headers = self._api_headers(cookies)
+        try:
+            response = self.session.request(
+                "GET",
+                url,
+                cookies=cookies,
+                headers=headers,
+                timeout=30,
+                allow_redirects=False,
+                stream=True,
+            )
+        except requests.RequestException as exc:
+            raise RepositoryTransportError("failed to request favorites source") from exc
+        content_length = response.headers.get("Content-Length") or response.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    raise RepositoryResponseError("favorites response is too large")
+            except ValueError as exc:
+                raise RepositoryResponseError("favorites response length is invalid") from exc
+        chunks = []
+        total = 0
+        try:
+            for chunk in response.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_bytes:
+                    raise RepositoryResponseError("favorites response is too large")
+                chunks.append(chunk)
+        except requests.RequestException as exc:
+            raise RepositoryTransportError("failed to read favorites source") from exc
+        raw = b"".join(chunks)
+        content_type = response.headers.get("Content-Type", "")
+        encoding = getattr(response, "encoding", None) or "utf-8"
+        try:
+            text = raw.decode(encoding, errors="strict")
+        except (LookupError, UnicodeDecodeError) as exc:
+            raise RepositoryResponseError("favorites response encoding is invalid") from exc
+        try:
+            payload: Any = json.loads(text)
+        except (TypeError, ValueError):
+            payload = text
+        return RepositoryHttpResult(response.status_code, payload, content_type)
 
     def _request_repository(self, url: str) -> RepositoryHttpResult:
         """Request repository metadata while preserving the HTTP status."""

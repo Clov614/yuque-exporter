@@ -150,7 +150,8 @@ cli-anything-yuque repo tree --repo owner/book-slug --profile default --json
 cli-anything-yuque repo tree --repo https://www.yuque.com/owner/book-slug --profile default --json
 ```
 
-- `repo list`：列出当前常用知识库；它不是完整的收藏列表
+- `repo list`：默认列出当前常用知识库；它不是完整的收藏列表
+- `repo list --source favorites`：只列出收藏页中明确标记为 Book/知识库的卡片；收藏文档的所属知识库不会被自动加入
 - `repo tree`：查看指定知识库目录结构；`--repo-id` 与 `--repo` 必须二选一
 - `--repo`：接受 `owner/book-slug` 或完整的 Yuque 知识库 URL
 

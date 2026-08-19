@@ -18,7 +18,9 @@ class RepoService:
     def __init__(self, profile: str):
         self.profile = profile
 
-    def list_repos(self) -> List[Dict[str, Any]]:
+    def list_repos(self, source: str = "common") -> List[Dict[str, Any]]:
+        if source not in {"common", "favorites"}:
+            raise ValueError(f"unsupported repository source: {source}")
         profile_auth = ProfileAuth(self.profile)
         manager = profile_auth.browser_manager()
         page = manager.start(headless=True)
@@ -27,7 +29,11 @@ class RepoService:
             if not auth.load_cookies(page):
                 raise RepositoryAuthenticationError("profile is not authenticated")
             client = YuqueClient(page, auth=auth)
-            repos = client.get_repositories()
+            repos = (
+                client.get_repositories()
+                if source == "common"
+                else client.get_favorite_repositories()
+            )
             return [asdict(repo) for repo in repos]
         finally:
             manager.quit()

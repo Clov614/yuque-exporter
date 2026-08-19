@@ -129,12 +129,18 @@ class Application:
         """Choose repositories from the common list or a direct reference."""
         source = UI.ask_choice(
             "请选择知识库来源:",
-            ["从常用知识库列表选择", "通过 ID / namespace / URL 直接指定"],
+            [
+                "从常用知识库列表选择",
+                "从收藏知识库列表选择",
+                "通过 ID / namespace / URL 直接指定",
+            ],
         )
         if source == "通过 ID / namespace / URL 直接指定":
             return self._select_direct_repositories()
         if source == "从常用知识库列表选择":
             return self._select_from_common_repositories()
+        if source == "从收藏知识库列表选择":
+            return self._select_from_favorite_repositories()
         return []
 
     def _select_from_common_repositories(self) -> list[Repository]:
@@ -165,6 +171,33 @@ class Application:
         return UI.ask_checkbox(
             "请选择要导出的知识库 (按空格选择，回车确认):",
             repo_choices,
+        )
+
+    def _select_from_favorite_repositories(self) -> list[Repository]:
+        client = self._require_client()
+        try:
+            with UI.create_progress() as progress:
+                task = progress.add_task("获取收藏知识库列表...", total=None)
+                repositories = client.get_favorite_repositories()
+                progress.update(task, completed=100, visible=False)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取收藏知识库列表失败: {exc}")
+            return []
+
+        if not repositories:
+            UI.warning("未识别到收藏知识库；文档收藏不会升级为知识库收藏")
+            if UI.ask_confirm("是否改为直接输入知识库 ID、namespace 或 URL？"):
+                return self._select_direct_repositories()
+            return []
+
+        UI.show_repos(repositories)
+        choices = [
+            {"name": f"[{index}] {repository.name}", "value": repository}
+            for index, repository in enumerate(repositories, 1)
+        ]
+        return UI.ask_checkbox(
+            "请选择要导出的收藏知识库 (按空格选择，回车确认):",
+            choices,
         )
 
     def _select_direct_repositories(self) -> list[Repository]:

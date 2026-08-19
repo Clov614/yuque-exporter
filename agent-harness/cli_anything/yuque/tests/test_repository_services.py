@@ -104,6 +104,36 @@ def test_export_service_requires_exactly_one_range_before_browser_start(
         ExportService("default").run(**kwargs)
 
 
+def test_repo_service_lists_requested_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class ListingClient(FakeYuqueClient):
+        def get_repositories(self):
+            calls.append("common")
+            return [self.repo]
+
+        def get_favorite_repositories(self):
+            calls.append("favorites")
+            return [self.repo]
+
+    monkeypatch.setattr(repo_mod, "ProfileAuth", FakeProfileAuth)
+    monkeypatch.setattr(repo_mod, "YuqueClient", ListingClient)
+
+    common = RepoService("default").list_repos()
+    favorites = RepoService("default").list_repos(source="favorites")
+
+    assert [row["id"] for row in common] == [42]
+    assert [row["id"] for row in favorites] == [42]
+    assert calls == ["common", "favorites"]
+
+
+def test_repo_service_rejects_unknown_source_before_browser_start() -> None:
+    with pytest.raises(ValueError, match="unsupported repository source"):
+        RepoService("default").list_repos(source="unknown")
+
+
 def test_repo_tree_resolves_directly_without_repository_listing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -15,9 +15,14 @@ from core.repository_resolver import (
 
 class CapturingRepoService:
     calls: list[dict[str, Any]] = []
+    list_calls: list[str] = []
 
     def __init__(self, profile: str) -> None:
         assert profile == "default"
+
+    def list_repos(self, source: str = "common") -> list[dict[str, Any]]:
+        self.list_calls.append(source)
+        return []
 
     def tree(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
@@ -43,6 +48,7 @@ class CapturingExportService:
 @pytest.fixture(autouse=True)
 def reset_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     CapturingRepoService.calls = []
+    CapturingRepoService.list_calls = []
     CapturingExportService.calls = []
     monkeypatch.setattr(yuque_cli, "RepoService", CapturingRepoService)
     monkeypatch.setattr(yuque_cli, "ExportService", CapturingExportService)
@@ -50,6 +56,29 @@ def reset_calls(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def invoke(*args: str):
     return CliRunner().invoke(yuque_cli.cli, ["--json", *args])
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_source"),
+    [
+        (("repo", "list"), "common"),
+        (("repo", "list", "--source", "favorites"), "favorites"),
+    ],
+)
+def test_repo_list_passes_explicit_source(
+    args: tuple[str, ...],
+    expected_source: str,
+) -> None:
+    result = invoke(*args)
+
+    assert result.exit_code == yuque_cli.EXIT_OK
+    assert CapturingRepoService.list_calls == [expected_source]
+
+
+def test_repo_list_rejects_unknown_source() -> None:
+    result = invoke("repo", "list", "--source", "unknown")
+
+    assert result.exit_code == yuque_cli.EXIT_PARAM
 
 
 @pytest.mark.parametrize(

@@ -212,11 +212,24 @@ def repo() -> None:
 
 
 @repo.command("list")
+@click.option(
+    "--source",
+    type=click.Choice(["common", "favorites"], case_sensitive=False),
+    default="common",
+    show_default=True,
+)
 @common_cmd_options
 @click.pass_context
-def repo_list(ctx: click.Context, as_json: bool, profile: Optional[str], output_dir: Optional[str], verbose: bool) -> None:
+def repo_list(
+    ctx: click.Context,
+    source: str,
+    as_json: bool,
+    profile: Optional[str],
+    output_dir: Optional[str],
+    verbose: bool,
+) -> None:
     _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
-    _run(ctx, lambda: RepoService(_profile(ctx)).list_repos())
+    _run(ctx, lambda: RepoService(_profile(ctx)).list_repos(source=source.lower()))
 
 
 @repo.command("tree")

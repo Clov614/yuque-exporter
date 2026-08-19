@@ -22,9 +22,14 @@ class FakeClient:
         self.repositories = repositories or []
         self.direct_calls: list[str] = []
         self.list_calls = 0
+        self.favorite_calls = 0
 
     def get_repositories(self) -> list[Repository]:
         self.list_calls += 1
+        return list(self.repositories)
+
+    def get_favorite_repositories(self) -> list[Repository]:
+        self.favorite_calls += 1
         return list(self.repositories)
 
     def get_repository(self, reference: str) -> Repository:
@@ -79,6 +84,37 @@ def test_direct_repository_selection_does_not_list_common_repositories(
     assert client.list_calls == 0
     assert client.direct_calls == ["https://www.yuque.com/owner/favorite-repo"]
     assert [repo.id for repo in selected] == [42]
+
+
+def test_favorite_repository_selection_uses_favorite_source_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = Repository(
+        id=7,
+        name="Favorite",
+        slug="favorite",
+        user_login="owner",
+    )
+    client = FakeClient([repository])
+    application = application_with(client)
+    monkeypatch.setattr(
+        UI,
+        "ask_choice",
+        staticmethod(lambda *_args, **_kwargs: "从收藏知识库列表选择"),
+    )
+    monkeypatch.setattr(UI, "create_progress", staticmethod(lambda: FakeProgress()))
+    monkeypatch.setattr(UI, "show_repos", staticmethod(lambda _repos: None))
+    monkeypatch.setattr(
+        UI,
+        "ask_checkbox",
+        staticmethod(lambda _message, choices: [choices[0]["value"]]),
+    )
+
+    selected = application._select_repositories()
+
+    assert [repo.id for repo in selected] == [7]
+    assert client.favorite_calls == 1
+    assert client.list_calls == 0
 
 
 def test_empty_common_list_can_fall_back_to_direct_input(

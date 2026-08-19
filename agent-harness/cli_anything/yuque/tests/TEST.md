@@ -45,6 +45,8 @@
    - GUI 直接输入、空列表 fallback、文本输入和真实 repo 标识
 11. `test_auth_security.py`
    - Cookie 凭据原子写入、POSIX owner-only 权限与 ACL 失败清理
+12. `test_favorite_repository_provider.py` / `test_favorite_repository_client.py`
+   - 真实 Book 卡片、marks 中明确 Book action、文档收藏排除、稳定去重和 favorites transport
 
 ---
 
@@ -88,13 +90,12 @@
 3. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests/test_subprocess.py`
    - ✅ 3 passed
 4. `python -m pytest agent-harness/cli_anything/yuque/tests -q`
-   - ✅ 172 passed (2 POSIX-only lock tests skipped on Windows)
+   - ✅ 196 passed (2 POSIX-only lock tests skipped on Windows)
 5. `python -m pytest agent-harness/cli_anything/yuque/tests -q --cov=src --cov=agent-harness/cli_anything/yuque --cov-branch --cov-report=term-missing`
-   - ✅ 172 passed (2 POSIX-only lock tests skipped on Windows)
-   - Whole project: 80.02%; BrowserManager: 82%; profile auth: 77%; repository reference: 92%; repository resolver: 87%
+   - ✅ 196 passed (2 POSIX-only lock tests skipped on Windows)
    - Full source aggregate: 79.02% (test files excluded from the production target)
    - Changed production modules: 83% branch-aware coverage
-   - Production target command covers auth, resolver, browser, CLI, services and validators; 170 tests passed
+   - Favorites provider: 84%; favorites service: 91%; production target command covers auth, resolver, browser, CLI, services and validators
 8. Non-editable wheel smoke test
    - ✅ `pip wheel ./agent-harness --no-deps` succeeded
    - ✅ installed wheel imports `cli_anything.yuque` and packaged `core` modules
@@ -105,3 +106,8 @@
    - ℹ️ The test account's only collected repository was also present in `common_used`, so an outside-`common_used` live fixture was unavailable
 7. Isolated PyInstaller build
    - ✅ `YuqueExporter.exe` built successfully in a temporary D: drive directory (77 MiB)
+8. Live favorites enumeration smoke
+   - ✅ 18 explicit Book cards resolved through `/api/books?namespace=...`
+   - ✅ `/api/mine/marks?limit=20&offset=0&type=all&q=` returned 11 actions, including 5 explicit Book targets
+   - ✅ Document actions and their owning repositories were excluded from repository discovery
+   - ℹ️ Current account's 18 collected repositories also appeared in common-used; outside-common live fixture remains unavailable

@@ -40,4 +40,6 @@ cli-anything-yuque export run \
 
 `--repo-id 123` remains supported for compatibility. `--repo` accepts exactly `owner/book-slug` or a Yuque repository URL; direct targets are resolved without first querying the common-used repository list.
 
+Use `repo list --source favorites --json` to enumerate only favorites-page cards explicitly identified as knowledge bases. Document favorites and their owning knowledge bases are intentionally excluded.
+
 The option is disabled by default. Successful HTTP(S) images are stored beside each document in `<document>.assets/`; failed images keep their original URL and do not mark the document export as failed. The JSON response includes an `image_localization` summary. Other export formats reject this option.
