@@ -120,6 +120,25 @@ def test_credentials_lock_blocks_other_process_on_posix(tmp_path: Path) -> None:
         child.wait(timeout=5)
 
 
+def test_windows_acl_verifier_allows_only_owner_and_system_principals(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def record(command: list[str], **_kwargs: object) -> object:
+        calls.append(command)
+        return object()
+
+    monkeypatch.setattr(auth_module.subprocess, "run", record)
+    auth_module._verify_windows_acl(tmp_path, 0)
+
+    script = calls[0][4]
+    assert "S-1-5-18" in script
+    assert "S-1-5-32-544" in script
+    assert "$sid -notin $allowed" in script
+
+
 def test_load_cookies_returns_false_for_missing_or_empty_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

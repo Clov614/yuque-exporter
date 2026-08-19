@@ -136,9 +136,11 @@ def _verify_windows_acl(path: Path, creation_flags: int) -> None:
 $target = '__TARGET__'
 $acl = Get-Acl -LiteralPath $target
 $current = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$allowed = @($current, 'S-1-5-18', 'S-1-5-32-544')
 $rules = @($acl.Access)
 $foreign = @($rules | Where-Object {
-  $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ne $current
+  $sid = $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+  $sid -notin $allowed
 })
 $ownerRules = @($rules | Where-Object {
   $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $current -and

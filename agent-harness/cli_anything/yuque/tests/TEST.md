@@ -90,9 +90,9 @@
 3. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests/test_subprocess.py`
    - ✅ 3 passed
 4. `python -m pytest agent-harness/cli_anything/yuque/tests -q`
-   - ✅ 196 passed (2 POSIX-only lock tests skipped on Windows)
+   - ✅ 197 passed (2 POSIX-only lock tests skipped on Windows)
 5. `python -m pytest agent-harness/cli_anything/yuque/tests -q --cov=src --cov=agent-harness/cli_anything/yuque --cov-branch --cov-report=term-missing`
-   - ✅ 196 passed (2 POSIX-only lock tests skipped on Windows)
+   - ✅ 197 passed (2 POSIX-only lock tests skipped on Windows)
    - Full source aggregate: 79.02% (test files excluded from the production target)
    - Changed production modules: 83% branch-aware coverage
    - Favorites provider: 84%; favorites service: 91%; production target command covers auth, resolver, browser, CLI, services and validators
