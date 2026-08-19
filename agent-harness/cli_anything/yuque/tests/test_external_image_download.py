@@ -63,6 +63,10 @@ def _public_dns(_host: str, *_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]
     return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
 
+def _tun_fake_ip_dns(_host: str, *_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
+    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("198.18.0.1", 443))]
+
+
 def _client_with(session: RecordingSession) -> YuqueClient:
     client = YuqueClient(FakeTab())
     client.external_session = session
@@ -115,6 +119,67 @@ def test_download_external_image_rejects_unsafe_urls_before_request(
     assert ok is False
     assert session.calls == []
     assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://cdn.nlark.com/yuque/0/2026/png.png",
+        "https://intranetproxy.alipay.com/image.png",
+        "https://cdn.alipayobjects.com/image.png",
+        "https://img.yuque.com/image.png",
+        "https://yuque.antfin.com/image.png",
+        "https://lark-assets-prod-aliyun.oss-cn-hangzhou.aliyuncs.com/image.png",
+    ],
+    ids=["nlark", "alipay", "alipayobjects", "yuque", "yuque-antfin", "yuque-oss"],
+)
+def test_public_ip_for_url_allows_trusted_yuque_image_domains_with_tun_fake_ip(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _tun_fake_ip_dns)
+
+    assert YuqueClient._public_ip_for_url(url) == "198.18.0.1"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://attacker.example/image.png",
+        "https://cdn.nlark.com.attacker.example/image.png",
+        "https://attacker.yuque.antfin.com/image.png",
+        "https://attacker.lark-assets-prod-aliyun.oss-cn-hangzhou.aliyuncs.com/image.png",
+    ],
+    ids=["unrelated-domain", "trusted-domain-suffix", "antfin-subdomain", "oss-subdomain"],
+)
+def test_public_ip_for_url_rejects_tun_fake_ip_for_untrusted_domain(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _tun_fake_ip_dns)
+
+    assert YuqueClient._public_ip_for_url(url) is None
+
+
+def test_public_ip_for_url_rejects_tun_fake_ip_literal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(socket, "getaddrinfo", _tun_fake_ip_dns)
+
+    assert YuqueClient._public_ip_for_url("https://198.18.12.34/image.png") is None
+
+
+@pytest.mark.parametrize(
+    "resolved_address",
+    ["127.0.0.1", "10.0.0.8", "192.168.0.1", "::1"],
+    ids=["loopback-ipv4", "private-10", "private-192", "loopback-ipv6"],
+)
+def test_public_ip_for_url_rejects_loopback_and_private_addresses(
+    monkeypatch: pytest.MonkeyPatch, resolved_address: str
+) -> None:
+    def resolve_to_test_address(_host: str, *_args: Any, **_kwargs: Any) -> list[tuple[Any, ...]]:
+        family = socket.AF_INET6 if ":" in resolved_address else socket.AF_INET
+        return [(family, socket.SOCK_STREAM, 6, "", (resolved_address, 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_to_test_address)
+
+    assert YuqueClient._public_ip_for_url("https://images.example.test/image.png") is None
 
 
 @pytest.mark.parametrize(

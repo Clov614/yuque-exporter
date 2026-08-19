@@ -111,6 +111,17 @@ class YuqueClient:
     DEFAULT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
     MAX_IMAGE_DOWNLOAD_SECONDS = 120
     MAX_IMAGE_REDIRECTS = 3
+    TUN_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
+    TRUSTED_TUN_IMAGE_DOMAINS = (
+        "nlark.com",
+        "alipay.com",
+        "alipayobjects.com",
+        "yuque.com",
+    )
+    TRUSTED_TUN_IMAGE_EXACT_DOMAINS = (
+        "yuque.antfin.com",
+        "lark-assets-prod-aliyun.oss-cn-hangzhou.aliyuncs.com",
+    )
     
     def __init__(self, tab):
         """
@@ -459,21 +470,47 @@ class YuqueClient:
                 return None
 
             try:
-                addresses = [ipaddress.ip_address(parsed.hostname)]
+                literal_address = ipaddress.ip_address(parsed.hostname)
             except ValueError:
-                port = parsed.port or (443 if scheme == "https" else 80)
-                rows = socket.getaddrinfo(
-                    parsed.hostname,
-                    port,
-                    type=socket.SOCK_STREAM,
-                )
-                addresses = [ipaddress.ip_address(row[4][0]) for row in rows]
+                literal_address = None
 
-            if not addresses or not all(address.is_global for address in addresses):
+            if literal_address is not None:
+                return str(literal_address) if literal_address.is_global else None
+
+            port = parsed.port or (443 if scheme == "https" else 80)
+            rows = socket.getaddrinfo(
+                parsed.hostname,
+                port,
+                type=socket.SOCK_STREAM,
+            )
+            addresses = [ipaddress.ip_address(row[4][0]) for row in rows]
+            if not addresses:
                 return None
-            return str(addresses[0])
+            if all(address.is_global for address in addresses):
+                return str(addresses[0])
+            if YuqueClient._is_trusted_tun_fake_ip(parsed.hostname, addresses):
+                return str(addresses[0])
+            return None
         except (OSError, ValueError, UnicodeError):
             return None
+
+    @classmethod
+    def _is_trusted_tun_fake_ip(
+        cls,
+        hostname: str,
+        addresses: List[ipaddress.IPv4Address | ipaddress.IPv6Address],
+    ) -> bool:
+        normalized_hostname = hostname.rstrip(".").lower()
+        trusted_domain = normalized_hostname in cls.TRUSTED_TUN_IMAGE_EXACT_DOMAINS or any(
+            normalized_hostname == domain
+            or normalized_hostname.endswith(f".{domain}")
+            for domain in cls.TRUSTED_TUN_IMAGE_DOMAINS
+        )
+        return trusted_domain and all(
+            isinstance(address, ipaddress.IPv4Address)
+            and address in cls.TUN_FAKE_IP_NETWORK
+            for address in addresses
+        )
 
     @classmethod
     def _is_safe_external_url(cls, url: str) -> bool:
@@ -505,7 +542,7 @@ class YuqueClient:
             headers=headers,
             cookies={},
             stream=True,
-            timeout=60,
+            timeout=(timeout_seconds, timeout_seconds),
             allow_redirects=False,
         )
 
