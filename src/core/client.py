@@ -16,8 +16,16 @@ from typing import List, Optional, Any, Dict
 from urllib.parse import urljoin, urlparse
 
 import requests
-from .auth import YuqueAuth, LoginStatus
+from .auth import YuqueAuth, LoginStatus, is_authenticated_yuque_url
 from .models import Repository, Document
+from .repository_reference import RepositoryReference
+from .repository_resolver import (
+    RepositoryHttpResult,
+    RepositoryResolver,
+    RepositoryResponseError,
+    RepositoryTransportError,
+)
+from .download_support import ExportDownloadMixin
 
 class ExportType(Enum):
     """文档导出格式"""
@@ -100,7 +108,7 @@ class _PinnedHTTPAdapter(HTTPAdapter):
         }
 
 
-class YuqueClient:
+class YuqueClient(ExportDownloadMixin):
     """
     语雀客户端 - 基于 DrissionPage
     """
@@ -109,7 +117,9 @@ class YuqueClient:
     API_COMMON_USED = "https://www.yuque.com/api/mine/common_used"
     API_DOC_EXPORT = "https://www.yuque.com/api/docs/{doc_id}/export"
     DEFAULT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+    DEFAULT_EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
     MAX_IMAGE_DOWNLOAD_SECONDS = 120
+    MAX_EXPORT_DOWNLOAD_SECONDS = 30 * 60
     MAX_IMAGE_REDIRECTS = 3
     TUN_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
     TRUSTED_TUN_IMAGE_DOMAINS = (
@@ -122,11 +132,13 @@ class YuqueClient:
         "yuque.antfin.com",
         "lark-assets-prod-aliyun.oss-cn-hangzhou.aliyuncs.com",
     )
+    YUQUE_UNSCOPED_COOKIE_NAMES = frozenset({"_yuque_session", "yuque_ctoken"})
     
-    def __init__(self, tab):
+    def __init__(self, tab, auth: Optional[YuqueAuth] = None):
         """
         Args:
             tab: DrissionPage 对象 (ChromiumPage or SessionPage)
+            auth: 可选的显式凭据存储，用于隔离 CLI profile。
         """
         self.tab = tab
         
@@ -149,7 +161,7 @@ class YuqueClient:
         self.external_session.mount("https://", external_adapter)
         self.external_session.mount("http://", external_adapter)
 
-        self.auth = YuqueAuth()
+        self.auth = auth or YuqueAuth()
 
     def login(self) -> bool:
         """
@@ -159,11 +171,11 @@ class YuqueClient:
         
         # 确保环境纯净：清除 Cookies 和 缓存
         try:
-            # 使用 CDP 命令强力清除
             self.tab.run_cdp("Network.clearBrowserCookies")
             self.tab.run_cdp("Network.clearBrowserCache")
-        except Exception as e:
-            print(f"⚠️ 清理浏览器数据失败: {e}")
+        except Exception:
+            print("❌ 无法安全清理旧浏览器会话，登录已取消")
+            return False
 
         self.tab.get("https://www.yuque.com/login")
         
@@ -176,7 +188,7 @@ class YuqueClient:
             time.sleep(1)
             try:
                 curr_url = self.tab.url
-                if "dashboard" in curr_url or "yuque.com/u/" in curr_url:
+                if is_authenticated_yuque_url(curr_url):
                     # 登录成功
                     # 额外等待一下确保 cookie 写入
                     time.sleep(2)
@@ -188,44 +200,51 @@ class YuqueClient:
         print("❌ 登录超时")
         return False
     
+    def get_repository(
+        self,
+        reference: RepositoryReference | int | str,
+    ) -> Repository:
+        """Resolve one repository without depending on a repository listing."""
+        parsed_reference = (
+            reference
+            if isinstance(reference, RepositoryReference)
+            else RepositoryReference.parse(reference)
+        )
+        return RepositoryResolver(self._request_repository).resolve(parsed_reference)
+
     def get_repositories(self) -> List[Repository]:
-        """获取所有知识库"""
+        """获取常用知识库列表。"""
         print("📚 获取知识库列表...")
-        try:
-            # 使用 requests 发送请求，因为 DrissionPage 直接 get 可能返回 HTML 渲染后的内容，
-            # 而我们想要纯 JSON。虽然 DP 也可以获取源码，但他会自动处理 JSON 吗？
-            # 沿用 requests 方案更稳健
-            data = self._request_api("GET", self.API_COMMON_USED)
-            if not data:
-                return []
-            
-            books = data.get('data', {}).get('books', [])
-            return [Repository.from_api_response(book) for book in books]
-            
-        except Exception as e:
-            print(f"❌ 获取知识库列表失败: {e}")
-            return []
+        result = self._request_json("GET", self.API_COMMON_USED)
+        RepositoryResolver.raise_for_status(result.status_code)
+        data = self._require_dict_payload(result.payload, "repository list")
+        container = data.get("data", {})
+        if not isinstance(container, dict):
+            raise RepositoryResponseError("Yuque returned invalid repository list data")
+        books = container.get("books", [])
+        if not isinstance(books, list):
+            raise RepositoryResponseError("Yuque returned invalid repository list items")
+        return [RepositoryResolver.repository_from_payload(book) for book in books]
 
     def get_catalog_nodes(self, repo: Repository) -> List[Document]:
-        """获取知识库目录结构"""
+        """获取知识库目录结构。"""
         url = "https://www.yuque.com/api/catalog_nodes"
         params = {"book_id": repo.id, "format": "list"}
-        
-        try:
-            data = self._request_api("GET", url, params=params)
-            if not data:
-                return []
-            
-            nodes_data = data.get('data', [])
-            nodes = []
-            for item in nodes_data:
-                item['book_id'] = repo.id
-                nodes.append(Document.from_api_response(item))
-            return nodes
-            
-        except Exception as e:
-            print(f"❌ 获取目录失败: {e}")
-            return []
+        result = self._request_json("GET", url, params=params)
+        RepositoryResolver.raise_for_status(result.status_code)
+        data = self._require_dict_payload(result.payload, "repository catalog")
+        nodes_data = data.get("data", [])
+        if not isinstance(nodes_data, list):
+            raise RepositoryResponseError("Yuque returned invalid repository catalog data")
+
+        if len(nodes_data) > 10000:
+            raise RepositoryResponseError("Yuque returned too many catalog nodes")
+        nodes = [
+            self._document_from_catalog_item(raw_item, repo.id)
+            for raw_item in nodes_data
+        ]
+        self._validate_catalog_graph(nodes)
+        return nodes
 
     def export_document(
         self, 
@@ -288,62 +307,6 @@ class YuqueClient:
         except Exception as e:
             print(f"❌ 导出文档异常: {e}")
             return None
-
-    def download_file(
-        self, 
-        url: str, 
-        save_path: str, 
-        progress_callback: Optional[Any] = None
-    ) -> bool:
-        """
-        下载文件
-        
-        Args:
-            url: 下载链接
-            save_path: 保存路径
-            progress_callback: 进度回调 (chunk_size, total_size)
-        """
-        try:
-            # 方案二：使用 requests 下载 (更稳定，易于控制进度和验证完整性)
-            browser_cookies = self.tab.cookies()
-            cookies = {c['name']: c['value'] for c in browser_cookies if 'name' in c and 'value' in c}
-            
-            headers = {
-                "User-Agent": self.tab.user_agent,
-                "Referer": "https://www.yuque.com/"
-            }
-            
-            response = self.session.get(url, cookies=cookies, headers=headers, stream=True, timeout=60)
-            if response.status_code != 200:
-                print(f"❌ 下载请求失败: {response.status_code}")
-                return False
-            
-            total_size = int(response.headers.get('content-length', 0))
-            if progress_callback and total_size > 0:
-                progress_callback(0, total_size)
-            
-            from pathlib import Path
-            path_obj = Path(save_path)
-            
-            with open(save_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        if progress_callback:
-                            progress_callback(len(chunk), None)
-            
-            # 验证大小
-            if path_obj.exists() and path_obj.stat().st_size > 0:
-                return True
-            else:
-                print("❌ 下载文件为空")
-                if path_obj.exists():
-                    path_obj.unlink() # 删除空文件
-                return False
-            
-        except Exception as e:
-            print(f"❌ 下载异常: {e}")
-            return False
 
     def download_external_image(
         self,
@@ -546,47 +509,200 @@ class YuqueClient:
             allow_redirects=False,
         )
 
+    def _request_repository(self, url: str) -> RepositoryHttpResult:
+        """Request repository metadata while preserving the HTTP status."""
+        return self._request_json("GET", url)
+
+    def _request_json(
+        self,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> RepositoryHttpResult:
+        """Request Yuque JSON while preserving status and filtering cookies."""
+        cookies = self._yuque_cookies(self.tab.cookies(), url)
+        headers = self._api_headers(cookies)
+        custom_headers = kwargs.pop("headers", None)
+        if isinstance(custom_headers, dict):
+            headers = {**headers, **custom_headers}
+        try:
+            response = self.session.request(
+                method,
+                url,
+                cookies=cookies,
+                headers=headers,
+                timeout=30,
+                allow_redirects=False,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise RepositoryTransportError("failed to request Yuque API") from exc
+
+        content_type = response.headers.get("Content-Type", "")
+        try:
+            payload = response.json()
+        except (TypeError, ValueError, requests.JSONDecodeError):
+            response_text = getattr(response, "text", None)
+            payload = response_text if isinstance(response_text, str) else None
+        return RepositoryHttpResult(
+            status_code=response.status_code,
+            payload=payload,
+            content_type=content_type,
+        )
+
+    @classmethod
+    def _yuque_cookies(
+        cls,
+        browser_cookies: List[Dict[str, Any]],
+        request_url: str,
+    ) -> Dict[str, str]:
+        """Apply browser-like domain/path scoping to Yuque API cookies."""
+        parsed = urlparse(request_url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme.lower() != "https" or host not in {"yuque.com", "www.yuque.com"}:
+            return {}
+        request_path = parsed.path or "/"
+        candidates = []
+        for cookie in browser_cookies:
+            name = cookie.get("name")
+            value = cookie.get("value")
+            if not isinstance(name, str) or not isinstance(value, str):
+                continue
+            raw_domain = str(cookie.get("domain") or "").lower()
+            domain = raw_domain.lstrip(".")
+            cookie_path = str(cookie.get("path") or "/")
+            if not cls._cookie_path_matches(cookie_path, request_path):
+                continue
+            if domain:
+                domain_matches = host == domain or (
+                    raw_domain.startswith(".") and host.endswith(f".{domain}")
+                )
+                if not domain_matches:
+                    continue
+                specificity = (host == domain, len(cookie_path))
+            elif name in cls.YUQUE_UNSCOPED_COOKIE_NAMES:
+                specificity = (True, len(cookie_path))
+            else:
+                continue
+            candidates.append((specificity, name, value))
+
+        result: Dict[str, str] = {}
+        for _, name, value in sorted(candidates):
+            result = {**result, name: value}
+        return result
+
+    @staticmethod
+    def _cookie_path_matches(cookie_path: str, request_path: str) -> bool:
+        if request_path == cookie_path:
+            return True
+        if not request_path.startswith(cookie_path):
+            return False
+        return cookie_path.endswith("/") or request_path[len(cookie_path)] == "/"
+
+    def _api_headers(self, cookies: Dict[str, str]) -> Dict[str, str]:
+        headers = {
+            "User-Agent": self.tab.user_agent,
+            "Referer": "https://www.yuque.com/",
+            "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        csrf_token = cookies.get("yuque_ctoken")
+        return {**headers, **({"X-CSRF-Token": csrf_token} if csrf_token else {})}
+
+    @staticmethod
+    def _require_dict_payload(payload: Any, label: str) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise RepositoryResponseError(f"Yuque returned invalid {label} JSON")
+        return payload
+
+    @staticmethod
+    def _document_from_catalog_item(raw_item: Any, book_id: int) -> Document:
+        if not isinstance(raw_item, dict):
+            raise RepositoryResponseError("Yuque returned an invalid catalog node")
+        title = raw_item.get("title")
+        uuid = raw_item.get("uuid")
+        raw_parent_uuid = raw_item.get("parent_uuid")
+        if raw_parent_uuid is not None and not isinstance(raw_parent_uuid, str):
+            raise RepositoryResponseError("Yuque returned an invalid catalog parent")
+        parent_uuid = raw_parent_uuid or ""
+        node_type = raw_item.get("type", "DOC")
+        doc_id = raw_item.get("doc_id") or raw_item.get("id", 0)
+        valid_doc_id = (
+            node_type == "TITLE"
+            or (
+                isinstance(doc_id, int)
+                and not isinstance(doc_id, bool)
+                and doc_id > 0
+            )
+        )
+        if (
+            not isinstance(title, str)
+            or not title
+            or not isinstance(uuid, str)
+            or not uuid
+            or not isinstance(parent_uuid, str)
+            or node_type not in {"DOC", "TITLE"}
+            or not valid_doc_id
+        ):
+            raise RepositoryResponseError("Yuque returned an invalid catalog node")
+        return Document.from_api_response(
+            {**raw_item, "parent_uuid": parent_uuid, "book_id": book_id}
+        )
+
+    @staticmethod
+    def _validate_catalog_graph(nodes: List[Document]) -> None:
+        node_map = {node.uuid: node for node in nodes}
+        if len(node_map) != len(nodes):
+            raise RepositoryResponseError("Yuque returned duplicate catalog UUIDs")
+        max_depth = 200
+        for node in nodes:
+            visited = set()
+            current = node
+            depth = 0
+            while current.parent_uuid:
+                if current.uuid in visited:
+                    raise RepositoryResponseError("Yuque returned a cyclic catalog")
+                visited.add(current.uuid)
+                parent = node_map.get(current.parent_uuid)
+                if parent is None:
+                    raise RepositoryResponseError("Yuque returned a dangling catalog parent")
+                current = parent
+                depth += 1
+                if depth > max_depth:
+                    raise RepositoryResponseError("Yuque catalog nesting is too deep")
+
     def _request_api(self, method: str, url: str, **kwargs) -> Optional[Dict]:
         """通用 API 请求封装 (使用 requests + browser cookies)"""
         try:
-            # 从浏览器获取 cookie
-            browser_cookies = self.tab.cookies()
-            cookies = {c['name']: c['value'] for c in browser_cookies if 'name' in c and 'value' in c}
-            
-            headers = {
-                "User-Agent": self.tab.user_agent,
-                "Referer": "https://www.yuque.com/",
-                "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest" 
-            }
+            cookies = self._yuque_cookies(self.tab.cookies(), url)
+            headers = self._api_headers(cookies)
             
             # 合并自定义 headers
             if 'headers' in kwargs:
                 headers.update(kwargs.pop('headers'))
             
             response = self.session.request(
-                method, 
-                url, 
-                cookies=cookies, 
-                headers=headers, 
-                timeout=30, # 增加默认超时
-                **kwargs
+                method,
+                url,
+                cookies=cookies,
+                headers=headers,
+                timeout=30,
+                allow_redirects=False,
+                **kwargs,
             )
             
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 400:
-                # 尝试解析错误信息
                 try:
                     return response.json()
-                except:
-                    pass
-                print(f"API Error 400: {response.text[:100]}")
-                return None
+                except (TypeError, ValueError, requests.JSONDecodeError):
+                    print("API request failed with status 400")
+                    return None
             else:
-                print(f"API Error {response.status_code}: {response.text[:100]}")
+                print(f"API request failed with status {response.status_code}")
                 return None
-                
-        except Exception as e:
-            print(f"Request Exception: {e}")
+
+        except Exception:
+            print("API request failed")
             return None

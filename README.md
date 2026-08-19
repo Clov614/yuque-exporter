@@ -41,8 +41,8 @@
 
 ### 2. 导出知识库
 1. 在主菜单选择 **[📚 导出知识库]**。
-2. 程序会列出您所有可访问的知识库。
-3. **选择知识库**: 使用 `空格键` 选中一个或多个知识库，`回车键` 确认。
+2. 选择知识库来源：从常用列表选择，或直接输入知识库 ID、`owner/slug` namespace 或完整 Yuque 知识库 URL。
+3. 从列表选择时，使用 `空格键` 选中一个或多个知识库，`回车键` 确认；直接输入时会先验证当前会话是否有访问权限。
 4. **选择格式**: 支持 `Markdown` (推荐)、`PDF`、`Word`、`Lakebook`。
 5. **下载网络图片（仅 Markdown）**: 按需选择是否将 HTTP/HTTPS 图片保存到本地；默认关闭。
 6. **选择范围**:
@@ -146,10 +146,13 @@ cli-anything-yuque auth logout --profile default --json
 ```bash
 cli-anything-yuque repo list --profile default --json
 cli-anything-yuque repo tree --repo-id <repo_id> --profile default --json
+cli-anything-yuque repo tree --repo owner/book-slug --profile default --json
+cli-anything-yuque repo tree --repo https://www.yuque.com/owner/book-slug --profile default --json
 ```
 
-- `repo list`：列出可访问知识库
-- `repo tree`：查看指定知识库目录结构
+- `repo list`：列出当前常用知识库；它不是完整的收藏列表
+- `repo tree`：查看指定知识库目录结构；`--repo-id` 与 `--repo` 必须二选一
+- `--repo`：接受 `owner/book-slug` 或完整的 Yuque 知识库 URL
 
 ### 7) export 命令组
 
@@ -157,6 +160,8 @@ cli-anything-yuque repo tree --repo-id <repo_id> --profile default --json
 
 ```bash
 cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --profile default --json
+cli-anything-yuque export run --repo owner/book-slug --format markdown --all --profile default --json
+cli-anything-yuque export run --repo https://www.yuque.com/owner/book-slug --format markdown --all --profile default --json
 ```
 
 如需离线图片，在 Markdown 导出命令中加入 `--download-images`：
@@ -174,9 +179,14 @@ cli-anything-yuque export run --repo-id <repo_id> --format markdown --node <node
 #### 批量导出
 
 ```bash
-cli-anything-yuque export batch --repo-id <repo1> --repo-id <repo2> --format markdown --all --profile default --json
+cli-anything-yuque export batch \
+  --repo-id <repo1> \
+  --repo owner/book-slug \
+  --repo https://www.yuque.com/another/book \
+  --format markdown --all --profile default --json
 ```
 
+- `--repo-id` 与 `--repo` 都可以重复；batch 至少需要一个目标
 - `--format` 支持：`markdown | pdf | word | lake`
 - `export run/batch` 必须二选一：`--all` 或 `--node`
 - `--download-images` 默认关闭且仅可与 `--format markdown` 同时使用；JSON 结果会返回 `image_localization` 汇总

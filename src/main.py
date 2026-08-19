@@ -7,6 +7,7 @@
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # 添加 src 到路径以便导入 (开发模式)
 sys.path.append(str(Path(__file__).parent))
@@ -15,31 +16,30 @@ from core.client import YuqueClient, ExportType
 from core.auth import YuqueAuth, LoginStatus
 from core.models import Repository
 from core.exporter import DocumentExporter
+from core.repository_reference import RepositoryReferenceError
+from core.repository_resolver import RepositoryResolutionError
 from utils.browser import BrowserManager
 from ui.console import UI
 
 class Application:
-    def __init__(self):
+    def __init__(self) -> None:
         self.browser_manager = BrowserManager()
-        self.page = None
-        self.client = None
+        self.page: Any | None = None
+        self.client: YuqueClient | None = None
         self.auth = YuqueAuth()
         self.exporter = DocumentExporter()
         
     def startup(self):
         """启动流程"""
-        UI.print_banner()
-        
-        # 1. 默认无头启动
-        UI.info("正在初始化浏览器环境...")
-        self.page = self.browser_manager.start(headless=True)
-        self.client = YuqueClient(self.page)
-        
-        # 2. 检查登录
-        self.check_login()
-        
-        # 3. 进入主菜单
-        self.main_menu()
+        try:
+            UI.print_banner()
+            UI.info("正在初始化浏览器环境...")
+            self.page = self.browser_manager.start(headless=True)
+            self.client = YuqueClient(self.page)
+            self.check_login()
+            self.main_menu()
+        finally:
+            self.shutdown()
         
     def check_login(self):
         """检查并处理登录"""
@@ -72,6 +72,7 @@ class Application:
             self.client = YuqueClient(self.page)
         else:
             UI.error("登录失败")
+            self.shutdown()
             sys.exit(1)
 
     def main_menu(self):
@@ -94,29 +95,7 @@ class Application:
 
     def export_flow(self):
         """导出流程"""
-        # Get repos
-        with UI.create_progress() as progress:
-            task = progress.add_task("获取知识库列表...", total=None)
-            repos = self.client.get_repositories()
-            progress.update(task, completed=100, visible=False)
-            
-        if not repos:
-            UI.warning("未找到任何知识库")
-            return
-
-        # Show Repos
-        UI.show_repos(repos)
-        
-        # Select Repos
-        repo_choices = [
-            {'name': f"[{i+1}] {r.name}", 'value': r} 
-            for i, r in enumerate(repos)
-        ]
-        selected_repos = UI.ask_checkbox(
-            "请选择要导出的知识库 (按空格选择，回车确认):",
-            repo_choices
-        )
-        
+        selected_repos = self._select_repositories()
         if not selected_repos:
             return
 
@@ -141,6 +120,72 @@ class Application:
         for repo in selected_repos:
             self.process_repo_export(repo, export_type, download_images=download_images)
 
+    def _require_client(self) -> YuqueClient:
+        if self.client is None:
+            raise RuntimeError("Yuque client is not initialized")
+        return self.client
+
+    def _select_repositories(self) -> list[Repository]:
+        """Choose repositories from the common list or a direct reference."""
+        source = UI.ask_choice(
+            "请选择知识库来源:",
+            ["从常用知识库列表选择", "通过 ID / namespace / URL 直接指定"],
+        )
+        if source == "通过 ID / namespace / URL 直接指定":
+            return self._select_direct_repositories()
+        if source == "从常用知识库列表选择":
+            return self._select_from_common_repositories()
+        return []
+
+    def _select_from_common_repositories(self) -> list[Repository]:
+        client = self._require_client()
+        try:
+            with UI.create_progress() as progress:
+                task = progress.add_task("获取知识库列表...", total=None)
+                repositories = client.get_repositories()
+                progress.update(task, completed=100, visible=False)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取知识库列表失败: {exc}")
+            return []
+
+        if not repositories:
+            UI.warning("未找到常用知识库")
+            if UI.ask_confirm("是否改为直接输入知识库 ID、namespace 或 URL？"):
+                return self._select_direct_repositories()
+            return []
+
+        UI.show_repos(repositories)
+        repo_choices = [
+            {
+                "name": f"[{index}] {repository.name}",
+                "value": repository,
+            }
+            for index, repository in enumerate(repositories, 1)
+        ]
+        return UI.ask_checkbox(
+            "请选择要导出的知识库 (按空格选择，回车确认):",
+            repo_choices,
+        )
+
+    def _select_direct_repositories(self) -> list[Repository]:
+        client = self._require_client()
+        selected: tuple[Repository, ...] = ()
+        while True:
+            value = UI.ask_text("请输入知识库 ID、namespace 或 URL")
+            if not value:
+                return list(selected)
+            try:
+                repository = client.get_repository(value)
+            except (RepositoryReferenceError, RepositoryResolutionError) as exc:
+                UI.error(str(exc))
+                if UI.ask_confirm("输入无效，是否重试？"):
+                    continue
+                return list(selected)
+
+            selected = (*selected, repository)
+            if not UI.ask_confirm("是否继续添加另一个知识库？"):
+                return list(selected)
+
     def process_repo_export(
         self,
         repo: Repository,
@@ -148,10 +193,15 @@ class Application:
         download_images: bool = False,
     ) -> None:
         """处理单个知识库导出"""
+        client = self._require_client()
         UI.info(f"正在分析知识库: {repo.name}")
-        
+
         # Get Catalog
-        nodes = self.client.get_catalog_nodes(repo)
+        try:
+            nodes = client.get_catalog_nodes(repo)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取 [{repo.name}] 的目录失败: {exc}")
+            return
         if not nodes:
             UI.error(f"无法获取 [{repo.name}] 的目录结构")
             # Fallback to get_documents? No, catalog is better for structure.
@@ -269,7 +319,7 @@ class Application:
                 path_parts = full_path_str.split("/")
                 relative_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
                 
-                url = self.client.export_document(doc, export_type)
+                url = client.export_document(doc, export_type)
                 
                 # Determine extension
                 ext = f".{export_type.value}"
@@ -302,11 +352,11 @@ class Application:
                     # 重置下载任务
                     progress.reset(download_task, total=None, visible=False)
                     
-                    if self.client.download_file(url, str(save_path), progress_callback=update_progress):
+                    if client.download_file(url, str(save_path), progress_callback=update_progress):
                         if export_type == ExportType.MARKDOWN:
                             if download_images:
                                 image_result = self.exporter.localize_images(
-                                    save_path, self.client.download_external_image
+                                    save_path, client.download_external_image
                                 )
                                 image_downloaded_count += image_result.downloaded_count
                                 image_failed_count += len(image_result.failed_urls)

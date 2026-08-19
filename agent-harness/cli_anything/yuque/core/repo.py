@@ -9,9 +9,9 @@ from .project import ensure_src_on_path
 
 ensure_src_on_path()
 
-from core.auth import YuqueAuth  # type: ignore  # noqa: E402
 from core.client import YuqueClient  # type: ignore  # noqa: E402
-from utils.browser import BrowserManager  # type: ignore  # noqa: E402
+from core.repository_resolver import RepositoryAuthenticationError  # type: ignore  # noqa: E402
+from core.repository_reference import RepositoryReference  # type: ignore  # noqa: E402
 
 
 class RepoService:
@@ -19,32 +19,37 @@ class RepoService:
         self.profile = profile
 
     def list_repos(self) -> List[Dict[str, Any]]:
-        auth = ProfileAuth(self.profile)
-        auth._sync_profile_to_legacy()
-        manager = BrowserManager()
+        profile_auth = ProfileAuth(self.profile)
+        manager = profile_auth.browser_manager()
         page = manager.start(headless=True)
         try:
-            auth = YuqueAuth()
-            auth.load_cookies(page)
-            client = YuqueClient(page)
+            auth = profile_auth.auth()
+            if not auth.load_cookies(page):
+                raise RepositoryAuthenticationError("profile is not authenticated")
+            client = YuqueClient(page, auth=auth)
             repos = client.get_repositories()
             return [asdict(repo) for repo in repos]
         finally:
             manager.quit()
 
-    def tree(self, repo_id: int) -> Dict[str, Any]:
-        auth = ProfileAuth(self.profile)
-        auth._sync_profile_to_legacy()
-        manager = BrowserManager()
+    def tree(
+        self,
+        repo_id: int | None = None,
+        repo: str | None = None,
+    ) -> Dict[str, Any]:
+        reference = RepositoryReference.from_selector(
+            repository_id=repo_id,
+            reference=repo,
+        )
+        profile_auth = ProfileAuth(self.profile)
+        manager = profile_auth.browser_manager()
         page = manager.start(headless=True)
         try:
-            auth = YuqueAuth()
-            auth.load_cookies(page)
-            client = YuqueClient(page)
-            repos = client.get_repositories()
-            target = next((r for r in repos if int(r.id) == int(repo_id)), None)
-            if not target:
-                raise ValueError(f"repository not found: {repo_id}")
+            auth = profile_auth.auth()
+            if not auth.load_cookies(page):
+                raise RepositoryAuthenticationError("profile is not authenticated")
+            client = YuqueClient(page, auth=auth)
+            target = client.get_repository(reference)
             nodes = client.get_catalog_nodes(target)
             return {
                 "repo": asdict(target),

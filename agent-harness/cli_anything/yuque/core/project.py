@@ -15,12 +15,19 @@ def src_root() -> Path:
 
 def ensure_src_on_path() -> Path:
     src = src_root()
-    if not src.exists():
-        raise RuntimeError(f"src directory not found: {src}")
-    src_str = str(src)
-    if src_str not in sys.path:
-        sys.path.insert(0, src_str)
-    return src
+    if src.exists():
+        src_str = str(src)
+        if src_str not in sys.path:
+            sys.path.insert(0, src_str)
+        return src
+
+    try:
+        import core  # type: ignore
+
+        package_root = Path(core.__file__).resolve().parent
+        return package_root.parent
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(f"src directory not found: {src}") from exc
 
 
 def profile_root(profile: str) -> Path:

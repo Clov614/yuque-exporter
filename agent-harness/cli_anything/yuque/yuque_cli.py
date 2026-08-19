@@ -12,6 +12,10 @@ from .core.export import ExportService
 from .core.project import ensure_src_on_path, project_info, project_paths
 from .core.repo import RepoService
 from .core.session import SessionStore
+from core.repository_resolver import (  # type: ignore  # noqa: E402
+    RepositoryAuthenticationError,
+    RepositoryResolutionError,
+)
 from .utils.output import emit, failure, success
 from .utils.validators import (
     normalize_output_dir,
@@ -19,6 +23,8 @@ from .utils.validators import (
     validate_node_values,
     validate_profile,
     validate_repo_id,
+    validate_repository_references,
+    validate_repository_selector,
 )
 
 
@@ -44,6 +50,10 @@ def map_exception(exc: Exception) -> HarnessError:
         return HarnessError("bad_parameter", str(exc), EXIT_PARAM)
     if isinstance(exc, click.UsageError):
         return HarnessError("usage_error", str(exc), EXIT_PARAM)
+    if isinstance(exc, RepositoryAuthenticationError):
+        return HarnessError("auth_error", str(exc), EXIT_AUTH)
+    if isinstance(exc, RepositoryResolutionError):
+        return HarnessError("remote_error", str(exc), EXIT_REMOTE)
 
     msg = str(exc).lower()
     if "login" in msg or "cookie" in msg or "auth" in msg:
@@ -82,6 +92,16 @@ def _apply_common_overrides(
 
 def _profile(ctx: click.Context) -> str:
     return validate_profile(str(_ctx_value(ctx, "profile")))
+
+
+def _repository_selector_kwargs(
+    repo_id: int | None,
+    repo: str | None,
+) -> Dict[str, Any]:
+    reference = validate_repository_selector(repo_id, repo)
+    if reference.repository_id is not None:
+        return {"repo_id": reference.repository_id}
+    return {"repo": reference.namespace}
 
 
 @contextlib.contextmanager
@@ -200,22 +220,26 @@ def repo_list(ctx: click.Context, as_json: bool, profile: Optional[str], output_
 
 
 @repo.command("tree")
-@click.option("--repo-id", type=int, required=True)
+@click.option("--repo-id", type=int, default=None, help="Numeric Yuque repository ID")
+@click.option("--repo", default=None, help="Repository owner/slug or Yuque URL")
 @common_cmd_options
 @click.pass_context
 def repo_tree(
     ctx: click.Context,
-    repo_id: int,
+    repo_id: int | None,
+    repo: str | None,
     as_json: bool,
     profile: Optional[str],
     output_dir: Optional[str],
     verbose: bool,
 ) -> None:
     _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
-    _run(
-        ctx,
-        lambda: RepoService(_profile(ctx)).tree(validate_repo_id(repo_id)),
-    )
+
+    def execute() -> Dict[str, Any]:
+        selector = _repository_selector_kwargs(repo_id, repo)
+        return RepoService(_profile(ctx)).tree(**selector)
+
+    _run(ctx, execute)
 
 
 @cli.group()
@@ -224,7 +248,8 @@ def export() -> None:
 
 
 @export.command("run")
-@click.option("--repo-id", type=int, required=True)
+@click.option("--repo-id", type=int, default=None, help="Numeric Yuque repository ID")
+@click.option("--repo", default=None, help="Repository owner/slug or Yuque URL")
 @click.option("--format", "fmt", default="markdown")
 @click.option("--all", "all_docs", is_flag=True)
 @click.option("--node", "nodes", multiple=True)
@@ -238,7 +263,8 @@ def export() -> None:
 @click.pass_context
 def export_run(
     ctx: click.Context,
-    repo_id: int,
+    repo_id: int | None,
+    repo: str | None,
     fmt: str,
     all_docs: bool,
     nodes: Iterable[str],
@@ -251,17 +277,18 @@ def export_run(
     _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
 
     def execute() -> Dict[str, Any]:
+        selector = _repository_selector_kwargs(repo_id, repo)
         validated_nodes = validate_node_values(nodes)
         validated_format = validate_format(fmt)
-        if not all_docs and not validated_nodes:
-            raise click.BadParameter("use --all or at least one --node")
+        if all_docs == bool(validated_nodes):
+            raise click.BadParameter("use exactly one of --all or --node")
         if download_images and validated_format != "markdown":
             raise click.BadParameter(
                 "--download-images requires --format markdown",
                 param_hint="--download-images",
             )
         return ExportService(_profile(ctx), _ctx_value(ctx, "output_dir")).run(
-            repo_id=validate_repo_id(repo_id),
+            **selector,
             fmt=validated_format,
             all_docs=all_docs,
             node_uuids=validated_nodes,
@@ -272,7 +299,13 @@ def export_run(
 
 
 @export.command("batch")
-@click.option("--repo-id", "repo_ids", multiple=True, type=int, required=True)
+@click.option("--repo-id", "repo_ids", multiple=True, type=int)
+@click.option(
+    "--repo",
+    "repos",
+    multiple=True,
+    help="Repeatable repository owner/slug or Yuque URL",
+)
 @click.option("--format", "fmt", default="markdown")
 @click.option("--all", "all_docs", is_flag=True)
 @click.option("--node", "nodes", multiple=True)
@@ -287,6 +320,7 @@ def export_run(
 def export_batch(
     ctx: click.Context,
     repo_ids: Iterable[int],
+    repos: Iterable[str],
     fmt: str,
     all_docs: bool,
     nodes: Iterable[str],
@@ -299,17 +333,28 @@ def export_batch(
     _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
 
     def execute() -> Dict[str, Any]:
+        validated_repo_ids = [validate_repo_id(value) for value in repo_ids]
+        validated_repos = validate_repository_references(repos)
+        if not validated_repo_ids and not validated_repos:
+            raise click.BadParameter(
+                "use at least one --repo-id or --repo",
+                param_hint="--repo-id/--repo",
+            )
         validated_nodes = validate_node_values(nodes)
         validated_format = validate_format(fmt)
-        if not all_docs and not validated_nodes:
-            raise click.BadParameter("use --all or at least one --node")
+        if all_docs == bool(validated_nodes):
+            raise click.BadParameter("use exactly one of --all or --node")
         if download_images and validated_format != "markdown":
             raise click.BadParameter(
                 "--download-images requires --format markdown",
                 param_hint="--download-images",
             )
+        selectors = {
+            **({"repo_ids": validated_repo_ids} if validated_repo_ids else {}),
+            **({"repos": validated_repos} if validated_repos else {}),
+        }
         return ExportService(_profile(ctx), _ctx_value(ctx, "output_dir")).batch(
-            repo_ids=[validate_repo_id(v) for v in repo_ids],
+            **selectors,
             fmt=validated_format,
             all_docs=all_docs,
             node_uuids=validated_nodes,

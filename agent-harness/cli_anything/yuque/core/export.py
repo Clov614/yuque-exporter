@@ -11,10 +11,10 @@ from .project import ensure_src_on_path
 
 ensure_src_on_path()
 
-from core.auth import YuqueAuth  # type: ignore  # noqa: E402
 from core.client import ExportType, YuqueClient  # type: ignore  # noqa: E402
 from core.exporter import DocumentExporter  # type: ignore  # noqa: E402
-from utils.browser import BrowserManager  # type: ignore  # noqa: E402
+from core.repository_reference import RepositoryReference  # type: ignore  # noqa: E402
+from core.repository_resolver import RepositoryAuthenticationError  # type: ignore  # noqa: E402
 
 
 FORMAT_TO_EXPORT_TYPE = {
@@ -32,29 +32,36 @@ class ExportService:
 
     def run(
         self,
-        repo_id: int,
-        fmt: str,
-        all_docs: bool,
-        node_uuids: Iterable[str],
+        repo_id: int | None = None,
+        fmt: str = "markdown",
+        all_docs: bool = False,
+        node_uuids: Iterable[str] = (),
         download_images: bool = False,
+        repo: str | None = None,
     ) -> Dict[str, Any]:
+        if fmt not in FORMAT_TO_EXPORT_TYPE:
+            raise ValueError(f"unsupported export format: {fmt}")
         if download_images and fmt != "markdown":
             raise ValueError("download_images requires markdown format")
+        node_uuids = tuple(node_uuids)
+        if all_docs == bool(node_uuids):
+            raise ValueError("provide exactly one of all_docs or node_uuids")
 
-        auth = ProfileAuth(self.profile)
-        auth._sync_profile_to_legacy()
-        manager = BrowserManager()
+        reference = RepositoryReference.from_selector(
+            repository_id=repo_id,
+            reference=repo,
+        )
+        profile_auth = ProfileAuth(self.profile)
+        manager = profile_auth.browser_manager()
         page = manager.start(headless=True)
         try:
-            auth = YuqueAuth()
-            auth.load_cookies(page)
-            client = YuqueClient(page)
-            repos = client.get_repositories()
-            repo = next((r for r in repos if int(r.id) == int(repo_id)), None)
-            if not repo:
-                raise ValueError(f"repository not found: {repo_id}")
+            auth = profile_auth.auth()
+            if not auth.load_cookies(page):
+                raise RepositoryAuthenticationError("profile is not authenticated")
+            client = YuqueClient(page, auth=auth)
+            repository = client.get_repository(reference)
 
-            nodes = client.get_catalog_nodes(repo)
+            nodes = client.get_catalog_nodes(repository)
             selected = _select_nodes(nodes, all_docs=all_docs, node_uuids=set(node_uuids))
 
             exporter = DocumentExporter(output_dir=self.output_dir)
@@ -74,7 +81,12 @@ class ExportService:
                 path_parts = full_path.split("/") if full_path else []
                 rel_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
                 extension = ".md" if fmt == "markdown" else f".{fmt}"
-                save_path = exporter.get_save_path(doc, repo.name, extension=extension, relative_path=rel_dir)
+                save_path = exporter.get_save_path(
+                    doc,
+                    repository.name,
+                    extension=extension,
+                    relative_path=rel_dir,
+                )
 
                 if doc.type == "TITLE":
                     exported.append({"doc": asdict(doc), "status": "directory", "path": str(save_path.parent)})
@@ -120,7 +132,7 @@ class ExportService:
                 exported.append(item)
 
             summary = {
-                "repo": asdict(repo),
+                "repo": asdict(repository),
                 "format": fmt,
                 "requested": len(selected),
                 "success": len([x for x in exported if x["status"] in {"ok", "empty", "directory"}]),
@@ -131,7 +143,7 @@ class ExportService:
                 self.profile,
                 {
                     "event": "export.run",
-                    "repo_id": repo_id,
+                    "repo_id": repository.id,
                     "format": fmt,
                     "requested": summary["requested"],
                     "success": summary["success"],
@@ -143,22 +155,44 @@ class ExportService:
 
     def batch(
         self,
-        repo_ids: Iterable[int],
-        fmt: str,
-        all_docs: bool,
-        node_uuids: Iterable[str],
+        repo_ids: Iterable[int] = (),
+        fmt: str = "markdown",
+        all_docs: bool = False,
+        node_uuids: Iterable[str] = (),
         download_images: bool = False,
+        repos: Iterable[str] = (),
     ) -> Dict[str, Any]:
-        results = [
+        repo_id_values = tuple(repo_ids)
+        repository_values = tuple(repos)
+        node_values = tuple(node_uuids)
+        if not repo_id_values and not repository_values:
+            raise ValueError("at least one repository selector is required")
+        if fmt not in FORMAT_TO_EXPORT_TYPE:
+            raise ValueError(f"unsupported export format: {fmt}")
+        if all_docs == bool(node_values):
+            raise ValueError("provide exactly one of all_docs or node_uuids")
+
+        id_results = [
             self.run(
-                repo_id=r,
+                repo_id=repository_id,
                 fmt=fmt,
                 all_docs=all_docs,
-                node_uuids=node_uuids,
+                node_uuids=node_values,
                 download_images=download_images,
             )
-            for r in repo_ids
+            for repository_id in repo_id_values
         ]
+        reference_results = [
+            self.run(
+                repo=repository_reference,
+                fmt=fmt,
+                all_docs=all_docs,
+                node_uuids=node_values,
+                download_images=download_images,
+            )
+            for repository_reference in repository_values
+        ]
+        results = [*id_results, *reference_results]
         return {
             "count": len(results),
             "results": results,
@@ -199,6 +233,10 @@ def _select_nodes(nodes: List[Any], all_docs: bool, node_uuids: Set[str]) -> Lis
         return []
 
     node_map = {node.uuid: node for node in nodes}
+    unknown_uuids = node_uuids - node_map.keys()
+    if unknown_uuids:
+        unknown = ", ".join(sorted(unknown_uuids))
+        raise ValueError(f"unknown node UUID(s): {unknown}")
     children_map: Dict[str, List[Any]] = {}
     for node in nodes:
         children_map.setdefault(node.parent_uuid, []).append(node)

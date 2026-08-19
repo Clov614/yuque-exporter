@@ -4,15 +4,25 @@
 负责 ChromiumPage 的生命周期管理，支持有头/无头模式切换
 """
 
+import contextlib
+from pathlib import Path
+from typing import Optional, Any
+
 from DrissionPage import ChromiumPage, ChromiumOptions
-import time
 
 class BrowserManager:
     """管理 DrissionPage 实例"""
     
-    def __init__(self):
+    def __init__(self, user_data_dir: Optional[Path] = None, lifecycle_lock: Any = None):
         self.page = None
         self._is_headless = False
+        self._lifecycle_lock = lifecycle_lock
+        self._lock_context = None
+        self.user_data_dir = (
+            Path(user_data_dir).expanduser().resolve()
+            if user_data_dir is not None
+            else None
+        )
         
     def start(self, headless: bool = True) -> ChromiumPage:
         """
@@ -31,10 +41,16 @@ class BrowserManager:
 
         # 如果需要切换模式或尚未启动，先关闭旧的
         self.quit()
-        
+        if self._lifecycle_lock is not None:
+            self._lock_context = self._lifecycle_lock()
+            self._lock_context.__enter__()
+
         co = ChromiumOptions()
-        # 优化配置
-        co.set_argument('--no-sandbox')
+        if self.user_data_dir is not None:
+            self.user_data_dir.mkdir(parents=True, exist_ok=True)
+            co.set_user_data_path(str(self.user_data_dir))
+            co.auto_port(True)
+        # 优化配置（保留 Chromium 默认 sandbox）
         co.set_argument('--disable-gpu')
         co.mute(True) # 静音
         
@@ -52,6 +68,9 @@ class BrowserManager:
             
             return self.page
         except Exception as e:
+            if self._lock_context is not None:
+                self._lock_context.__exit__(type(e), e, e.__traceback__)
+                self._lock_context = None
             print(f"❌ 启动浏览器失败: {e}")
             raise
             
@@ -73,3 +92,6 @@ class BrowserManager:
             except:
                 pass
             self.page = None
+            if self._lock_context is not None:
+                self._lock_context.__exit__(None, None, None)
+                self._lock_context = None

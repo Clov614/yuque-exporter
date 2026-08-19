@@ -5,6 +5,9 @@
 - Unit: session/profile state handling, output envelope, validators, exit-code mapping, audit write.
 - E2E (mocked): full export orchestration without real network/browser.
 - Subprocess: installed/module CLI behavior for `--json` output and return codes.
+- Repository references: immutable ID/namespace/URL parsing, direct resolution and safe URL rejection.
+- Repository services: tree/export paths that do not depend on the common-used list.
+- Application/UI: direct repository input, empty-list fallback and repository identity display.
 
 ## Cases
 
@@ -30,6 +33,18 @@
 6. `test_cli_download_images.py`
    - `export run/batch --download-images` 参数传递
    - 非 Markdown 格式返回参数错误
+7. `test_repository_reference.py`
+   - 正整数 ID、namespace 和 Yuque URL 归一化
+   - 非法 host、文档 URL、编码路径和不安全 authority 拒绝
+8. `test_repository_resolver.py` / `test_repository_client.py`
+   - 已登录 Web API 查询、知识库页面 appData fallback、响应解包、状态码和错误脱敏
+9. `test_repository_services.py` / `test_repository_cli.py`
+   - direct tree/export 不调用 common-used 列表
+   - `--repo-id` 兼容、`--repo` 直达和 batch 混合目标
+10. `test_application_repository_selection.py`
+   - GUI 直接输入、空列表 fallback、文本输入和真实 repo 标识
+11. `test_auth_security.py`
+   - Cookie 凭据原子写入、POSIX owner-only 权限与 ACL 失败清理
 
 ---
 
@@ -39,8 +54,8 @@
 
 - Installed harness editable package:
   - `python -m pip install -e ./agent-harness` (success)
-- Installed test dependency:
-  - `python -m pip install pytest` (success)
+- Installed test dependencies:
+  - `python -m pip install pytest pytest-cov` (success)
 
 ## CLI verification
 
@@ -72,5 +87,21 @@
    - ✅ 3 passed
 3. `python -m pytest -v --tb=no agent-harness/cli_anything/yuque/tests/test_subprocess.py`
    - ✅ 3 passed
-4. `PYTHONPATH=agent-harness python -m pytest agent-harness/cli_anything/yuque/tests -q`
-   - ✅ 34 passed
+4. `python -m pytest agent-harness/cli_anything/yuque/tests -q`
+   - ✅ 172 passed (2 POSIX-only lock tests skipped on Windows)
+5. `python -m pytest agent-harness/cli_anything/yuque/tests -q --cov=src --cov=agent-harness/cli_anything/yuque --cov-branch --cov-report=term-missing`
+   - ✅ 172 passed (2 POSIX-only lock tests skipped on Windows)
+   - Whole project: 80.02%; BrowserManager: 82%; profile auth: 77%; repository reference: 92%; repository resolver: 87%
+   - Full source aggregate: 79.02% (test files excluded from the production target)
+   - Changed production modules: 83% branch-aware coverage
+   - Production target command covers auth, resolver, browser, CLI, services and validators; 170 tests passed
+8. Non-editable wheel smoke test
+   - ✅ `pip wheel ./agent-harness --no-deps` succeeded
+   - ✅ installed wheel imports `cli_anything.yuque` and packaged `core` modules
+   - Existing CI has no coverage gate
+6. Live authenticated browser smoke test
+   - ✅ `/api/books` repository lookup, repository-page `appData.book`, catalog, and one Markdown export succeeded
+   - ℹ️ `/api/v2/repos/...` returned 401 with browser cookies and is not used by the implementation
+   - ℹ️ The test account's only collected repository was also present in `common_used`, so an outside-`common_used` live fixture was unavailable
+7. Isolated PyInstaller build
+   - ✅ `YuqueExporter.exe` built successfully in a temporary D: drive directory (77 MiB)

@@ -53,7 +53,7 @@ class FakeBrowserManager:
 
 
 class FakeYuqueClient:
-    def __init__(self, _page):
+    def __init__(self, _page, auth=None):
         self.repo = FakeRepo(id=1, name="RepoA", slug="repo-a", user_login="u")
         self.nodes = [
             FakeDoc(id=10, title="Group", slug="group", uuid="root", parent_uuid="", type="TITLE", book_id=1),
@@ -62,7 +62,11 @@ class FakeYuqueClient:
         ]
 
     def get_repositories(self):
-        return [self.repo]
+        raise AssertionError("direct flows must not list repositories")
+
+    def get_repository(self, reference):
+        assert reference.canonical == "1"
+        return self.repo
 
     def get_catalog_nodes(self, _repo):
         return self.nodes
@@ -114,8 +118,16 @@ class FakeProfileAuth:
     def __init__(self, _profile: str):
         pass
 
-    def _sync_profile_to_legacy(self):
-        return None
+    def browser_manager(self):
+        return FakeBrowserManager()
+
+    def auth(self):
+        class FakeAuth:
+            @staticmethod
+            def load_cookies(_page):
+                return True
+
+        return FakeAuth()
 
 
 def test_export_service_run_all(monkeypatch, tmp_path: Path) -> None:
@@ -127,7 +139,6 @@ def test_export_service_run_all(monkeypatch, tmp_path: Path) -> None:
         return {"profile": profile, **event}
 
     monkeypatch.setattr("cli_anything.yuque.core.export.ProfileAuth", FakeProfileAuth)
-    monkeypatch.setattr("cli_anything.yuque.core.export.BrowserManager", FakeBrowserManager)
     monkeypatch.setattr("cli_anything.yuque.core.export.YuqueClient", FakeYuqueClient)
     monkeypatch.setattr("cli_anything.yuque.core.export.DocumentExporter", FakeExporter)
     monkeypatch.setattr("cli_anything.yuque.core.export.append_audit", fake_append_audit)
@@ -143,7 +154,6 @@ def test_export_service_run_all(monkeypatch, tmp_path: Path) -> None:
 
 def test_export_service_reports_partial_image_localization(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("cli_anything.yuque.core.export.ProfileAuth", FakeProfileAuth)
-    monkeypatch.setattr("cli_anything.yuque.core.export.BrowserManager", FakeBrowserManager)
     monkeypatch.setattr("cli_anything.yuque.core.export.YuqueClient", FakeYuqueClient)
     monkeypatch.setattr("cli_anything.yuque.core.export.DocumentExporter", FakeExporter)
     monkeypatch.setattr("cli_anything.yuque.core.export.append_audit", lambda *_a, **_k: {})
@@ -170,7 +180,6 @@ def test_export_service_reports_partial_image_localization(monkeypatch, tmp_path
 
 def test_export_service_run_node_filter(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("cli_anything.yuque.core.export.ProfileAuth", FakeProfileAuth)
-    monkeypatch.setattr("cli_anything.yuque.core.export.BrowserManager", FakeBrowserManager)
     monkeypatch.setattr("cli_anything.yuque.core.export.YuqueClient", FakeYuqueClient)
     monkeypatch.setattr("cli_anything.yuque.core.export.DocumentExporter", FakeExporter)
     monkeypatch.setattr("cli_anything.yuque.core.export.append_audit", lambda *_a, **_k: {})

@@ -71,6 +71,20 @@ class UI:
                     return None
 
     @staticmethod
+    def ask_text(message: str) -> Optional[str]:
+        """Ask for free-form text with a non-interactive fallback."""
+        try:
+            answer = questionary.text(message).ask()
+            normalized = answer.strip() if isinstance(answer, str) else ""
+            return normalized or None
+        except (EOFError, KeyboardInterrupt, OSError):
+            try:
+                answer = input(f"{message}: ").strip()
+                return answer or None
+            except (KeyboardInterrupt, EOFError):
+                return None
+
+    @staticmethod
     def ask_confirm(message: str, default: bool = False) -> bool:
         """询问是否启用可选功能，非交互环境默认保持关闭。"""
         try:
@@ -136,14 +150,23 @@ class UI:
     @staticmethod
     def show_repos(repos: List[Any]):
         table = Table(title="📚 知识库列表")
-        table.add_column("ID", style="dim", width=6)
+        table.add_column("序号", style="dim", width=6)
+        table.add_column("知识库 ID", style="dim", width=10)
+        table.add_column("Namespace", style="cyan")
         table.add_column("名称", style="cyan")
         table.add_column("文档数", justify="right")
         table.add_column("状态", justify="center")
-        
+
         for idx, repo in enumerate(repos, 1):
             visibility = "[green]公开[/green]" if repo.public else "[yellow]私有[/yellow]"
-            table.add_row(str(idx), repo.name, str(repo.doc_count), visibility)
+            table.add_row(
+                str(idx),
+                str(repo.id),
+                f"{repo.user_login}/{repo.slug}",
+                repo.name,
+                str(repo.doc_count),
+                visibility,
+            )
             
         console.print(table)
         

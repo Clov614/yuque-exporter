@@ -89,12 +89,12 @@ agent-harness/
    - `auth logout`（清理本地凭证）
 
 2. `repo`
-   - `repo list`
-   - `repo tree --repo-id <id>`
+   - `repo list`（当前常用知识库列表，不等同于收藏列表）
+   - `repo tree --repo-id <id>` 或 `repo tree --repo <owner/slug|Yuque URL>`
 
 3. `export`
-   - `export run --repo-id <id> --format markdown|pdf|word|lake [--all | --node <uuid> ...] [--download-images]`
-   - `export batch --repo-id <id>... [--download-images]`
+   - `export run --repo-id <id> ...` 或 `export run --repo <owner/slug|Yuque URL> ...`
+   - `export batch --repo-id <id>... --repo <owner/slug|Yuque URL>... [--download-images]`
    - `--download-images` 默认关闭且仅适用于 Markdown；图片部分失败不改变文档导出状态
 
 4. `session`
@@ -120,7 +120,8 @@ agent-harness/
 建议：`~/.yuque_harness/<profile>/`
 
 包含：
-- `cookies.json`
+- `cookies.json`（profile 独立的登录 Cookie）
+- `browser/`（profile 独立且受权限保护的 Chromium 状态；`auth logout` 会清空并重建）
 - `session.json`（最近成功操作、默认导出格式、默认输出目录）
 - `audit.log`（每次导出记录）
 

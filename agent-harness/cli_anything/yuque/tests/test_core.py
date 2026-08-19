@@ -10,6 +10,12 @@ from cli_anything.yuque.core import audit as audit_mod
 from cli_anything.yuque.core import session as session_mod
 from cli_anything.yuque.utils import output as output_mod
 from cli_anything.yuque.utils import validators
+from core.repository_resolver import (
+    RepositoryAccessDeniedError,
+    RepositoryAuthenticationError,
+    RepositoryNotFoundError,
+    RepositoryTransportError,
+)
 from cli_anything.yuque.yuque_cli import (
     EXIT_AUTH,
     EXIT_IO,
@@ -95,6 +101,19 @@ def test_map_exception_exit_codes() -> None:
     assert map_exception(RuntimeError("api error")).exit_code == EXIT_REMOTE
     assert map_exception(OSError("file permission denied")).exit_code == EXIT_IO
     assert map_exception(Exception("mystery")).exit_code == EXIT_UNKNOWN
+
+    auth_error = map_exception(RepositoryAuthenticationError("expired"))
+    assert auth_error.code == "auth_error"
+    assert auth_error.exit_code == EXIT_AUTH
+
+    for exception in (
+        RepositoryAccessDeniedError("denied"),
+        RepositoryNotFoundError("missing"),
+        RepositoryTransportError("unavailable"),
+    ):
+        remote_error = map_exception(exception)
+        assert remote_error.code == "remote_error"
+        assert remote_error.exit_code == EXIT_REMOTE
 
 
 def test_append_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

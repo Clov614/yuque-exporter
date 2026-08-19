@@ -92,3 +92,6 @@ dmypy.json
 yuque_export/
 .yuque/
 cookies.json
+
+# Claude Code local worktrees
+.claude/worktrees/
