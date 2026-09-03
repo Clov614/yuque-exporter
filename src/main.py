@@ -116,10 +116,10 @@ class Application:
         incremental = False
         if export_type == ExportType.MARKDOWN:
             download_images = UI.ask_confirm(
-                "是否将 Markdown 中的网络图片下载到本地？", default=False
+                "是否将 Markdown 中的网络图片下载到本地？", default=True
             )
             incremental = UI.ask_confirm(
-                "是否只导出有更新的文档（增量导出）？", default=False
+                "是否只导出有更新的文档（增量导出）？", default=True
             )
 
         # Process each repo
