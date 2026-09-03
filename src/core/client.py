@@ -381,15 +381,23 @@ class YuqueClient(ExportDownloadMixin):
 
         Verified live (``POST /api/books`` with ``name/slug/description/
         public``) using the user's own browser session. ``visibility`` accepts
-        ``private`` (default) or ``public``; ``team`` is sent as private since
-        the books endpoint has no team flag. Raises RepositoryResolutionError
-        subclasses on failure so callers stay fail-closed.
+        ``private`` (default) or ``public``; ``team`` raises
+        ``RepositoryResponseError`` because the books endpoint exposes no
+        team flag — callers must route team requests through the visible
+        browser flow instead of silently degrading to private.
+        Raises RepositoryResolutionError subclasses on failure so callers
+        stay fail-closed.
         """
         normalized_name = name.strip()
         if not normalized_name:
             raise RepositoryResponseError("repository name cannot be empty")
         if len(normalized_name) > 200:
             raise RepositoryResponseError("repository name is too long")
+        if visibility == "team":
+            raise RepositoryResponseError(
+                "team visibility has no books-protocol flag; "
+                "create it through the browser flow"
+            )
         payload: dict[str, object] = {
             "name": normalized_name,
             "description": description.strip(),

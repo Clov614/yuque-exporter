@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-from .markdown_input import MarkdownDocument
-from .models import Repository
 from .mutation_errors import (
     MutationAccessError,
     MutationAuthenticationError,
@@ -29,10 +26,6 @@ class YuqueBrowserWriter:
     CLICKABLE_TIMEOUT = 5
     _CREATE_REPOSITORY_BUTTONS = ("text:新建知识库", "text:新建空间")
     _CREATE_REPOSITORY_SUBMIT = ("text:创建知识库", "text:创建")
-    _CREATE_DOCUMENT_BUTTONS = ("text:新建文档", "text:新建")
-    _IMPORT_BUTTONS = ("text:导入", "text:导入文档")
-    _MARKDOWN_BUTTONS = ("text:Markdown", "text:Markdown 文件")
-    _IMPORT_SUBMIT = ("text:开始导入", "text:确认导入", "text:导入")
 
     def __init__(self, page: Any) -> None:
         self.page = page
@@ -63,16 +56,6 @@ class YuqueBrowserWriter:
         self._click(self._CREATE_REPOSITORY_SUBMIT, "create repository")
         self._wait_for_page()
         return self._namespace_from_url("created repository")
-
-    def import_markdown(self, repository: Repository, document: MarkdownDocument) -> str:
-        self._open_authenticated(repository.url)
-        self._click(self._CREATE_DOCUMENT_BUTTONS, "new document")
-        self._click(self._IMPORT_BUTTONS, "Markdown import")
-        self._click(self._MARKDOWN_BUTTONS, "Markdown format")
-        self._upload(document.path)
-        self._click(self._IMPORT_SUBMIT, "Markdown import submit")
-        self._wait_for_page()
-        return self._document_url_from_page("imported document")
 
     def _open_authenticated(self, url: str) -> None:
         self._assert_authenticated()
@@ -245,29 +228,12 @@ class YuqueBrowserWriter:
                 f"(state={self._describe(element)}, url={self._current_url()})"
             ) from exc
 
-    def _upload(self, path: Path) -> None:
-        element = self._find(("css:input[type='file']", "tag:input@type=file"), "file upload")
-        try:
-            element.input(str(path))
-        except Exception as exc:  # noqa: BLE001
-            raise MutationProtocolError(
-                f"unable to select Markdown file "
-                f"(state={self._describe(element)}, url={self._current_url()})"
-            ) from exc
-
     def _namespace_from_url(self, label: str) -> str:
         parsed = self._validated_url(label)
         parts = [part for part in parsed.path.split("/") if part]
         if len(parts) != 2:
             raise MutationProtocolError(f"Yuque did not confirm {label}")
         return "/".join(parts)
-
-    def _document_url_from_page(self, label: str) -> str:
-        parsed = self._validated_url(label)
-        parts = [part for part in parsed.path.split("/") if part]
-        if len(parts) != 3:
-            raise MutationProtocolError(f"Yuque did not confirm {label}")
-        return f"https://www.yuque.com/{'/'.join(parts)}"
 
     def _validated_url(self, label: str):
         current = str(getattr(self.page, "url", ""))
