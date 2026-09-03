@@ -96,7 +96,10 @@ class Application:
                     "🚪 退出",
                 ]
             )
-            
+            if choice is None:
+                # Ctrl+C / 无控制台回落：回到菜单等待下一次选择，不乱跳。
+                continue
+
             if choice == "📚 导出知识库":
                 self.export_flow()
             elif choice == "📥 导入 Markdown":

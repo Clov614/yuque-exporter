@@ -108,11 +108,16 @@ class UI:
 
     @staticmethod
     def ask_confirm(message: str, default: bool = False) -> bool:
-        """询问是否启用可选功能，问题文字自带默认选项说明。"""
+        """询问是否启用可选功能，问题文字自带默认选项说明。
+
+        必须 auto_enter=False：questionary 默认 True 会在用户敲 y/n 时
+        立刻提交，多补的回车残留在输入队列里，下一次 select 会被瞬间
+        选中首项（主菜单乱跳到导出的根因）。
+        """
         hint = "（默认是，直接回车即可）" if default else "（默认否，直接回车即可）"
         prompt = f"{message}{hint}"
         try:
-            answer = questionary.confirm(prompt, default=default).ask()
+            answer = questionary.confirm(prompt, default=default, auto_enter=False).ask()
             return default if answer is None else bool(answer)
         except Exception:
             suffix = "Y/n" if default else "y/N"
