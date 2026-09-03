@@ -149,7 +149,7 @@ class Application:
     def create_repository_flow(self) -> None:
         """Create one private-by-default repository, protocol first."""
         client = self._require_client()
-        name = UI.ask_text("请输入知识库名称")
+        name = UI.ask_required_text("请输入知识库名称")
         if not name:
             return
         slug = UI.ask_text("请输入知识库 slug（可留空自动生成）")
@@ -194,7 +194,7 @@ class Application:
         repository = self._select_single_repository()
         if repository is None:
             return
-        source = UI.ask_text("请输入 Markdown 文件路径")
+        source = UI.ask_required_text("请输入 Markdown 文件路径")
         if not source:
             return
         try:
