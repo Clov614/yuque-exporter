@@ -454,6 +454,7 @@ class YuqueClient(ExportDownloadMixin):
     ) -> Optional[str]:
         """导出文档，返回下载链接"""
         url = self.API_DOC_EXPORT.format(doc_id=doc.id)
+        doc_label = f"{doc.title} (id={doc.id}, slug={doc.slug}, book_id={doc.book_id})"
         
         options_str = ""
         if export_type == ExportType.MARKDOWN:
@@ -470,15 +471,16 @@ class YuqueClient(ExportDownloadMixin):
         try:
             # 1. 发起导出请求
             response = self._request_api("POST", url, json=payload)
-            
+
             # 特殊处理：未发布文档
             if response and response.get('status') == 400:
                 msg = response.get('message', '')
                 if "请发布后再导出" in msg:
-                    print(f"⚠️ 文档未发布: {doc.title}，将创建空文件")
+                    print(f"⚠️ 文档未发布: {doc_label}，将创建空文件")
                     return "EMPTY_DOC"
-            
+
             if not response:
+                print(f"⚠️ 发起导出无响应: {doc_label} url={url}")
                 return None
             
             data = response.get('data', {})
@@ -495,7 +497,7 @@ class YuqueClient(ExportDownloadMixin):
                 retry_count += 1
             
             if state != 'success':
-                print(f"❌ 导出超时或失败: state={state}")
+                print(f"❌ 导出超时或失败: {doc_label} state={state} retries={retry_count}")
                 return None
                 
             download_url = data.get('url', '')
@@ -505,7 +507,7 @@ class YuqueClient(ExportDownloadMixin):
             return download_url
             
         except Exception as e:
-            print(f"❌ 导出文档异常: {e}")
+            print(f"❌ 导出文档异常: {doc_label} url={url} err={e}")
             return None
 
     def download_external_image(
@@ -946,12 +948,22 @@ class YuqueClient(ExportDownloadMixin):
                 try:
                     return response.json()
                 except (TypeError, ValueError, requests.JSONDecodeError):
-                    print("API request failed with status 400")
+                    print(f"API request failed: {method} {url} status=400 (no json body)")
                     return None
             else:
-                print(f"API request failed with status {response.status_code}")
+                body = (response.text or "")[:200]
+                if response.status_code in (401, 403):
+                    print(
+                        f"API request denied: {method} {url} "
+                        f"status={response.status_code} body={body}"
+                    )
+                else:
+                    print(
+                        f"API request failed: {method} {url} "
+                        f"status={response.status_code} body={body}"
+                    )
                 return None
 
-        except Exception:
-            print("API request failed")
+        except Exception as exc:
+            print(f"API request failed: {method} {url} err={exc}")
             return None

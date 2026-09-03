@@ -434,6 +434,17 @@ class Application:
     ) -> None:
         """处理单个知识库导出"""
         client = self._require_client()
+        current_login = client._current_user_login()
+        if (
+            current_login
+            and repo.user_login
+            and repo.user_login != current_login
+        ):
+            UI.warning(
+                f"[{repo.name}] 为他人知识库 ({repo.user_login})，"
+                "官方导出接口可能无权限，失败属预期；"
+                "可改导自有库，或等页面解析导出支持。"
+            )
         UI.info(f"正在分析知识库: {repo.name}")
 
         # Get Catalog
@@ -563,8 +574,11 @@ class Application:
         success_count = 0
         image_downloaded_count = 0
         image_failed_count = 0
+        failed_docs: list[str] = []
         with UI.create_progress() as progress:
-            main_task = progress.add_task(f"导出 [{repo.name}]", total=len(pending_docs))
+            main_task = progress.add_task(
+                f"导出 [{repo.name}]", total=len(pending_docs)
+            )
 
             # 创建下载任务 (隐藏，用于显示单个文件进度)
             download_task = progress.add_task("等待下载...", total=None, visible=False)
@@ -584,6 +598,12 @@ class Application:
                 relative_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
 
                 url = client.export_document(doc, export_type)
+
+                if not url:
+                    failed_docs.append(f"{doc.title} (id={doc.id})")
+                    UI.warning(f"导出失败: {doc.title} (id={doc.id})，已跳过")
+                    progress.advance(main_task)
+                    continue
 
                 save_path = self.exporter.get_save_path(doc, repo.name, extension=ext, relative_path=relative_dir)
 
@@ -623,6 +643,9 @@ class Application:
                             stamp_metadata(incremental_plan, self.exporter, save_path, doc)
                         success_count += 1
                         record_exported(incremental_plan, doc)
+                    else:
+                        failed_docs.append(f"{doc.title} (id={doc.id})")
+                        UI.warning(f"下载失败: {doc.title} (id={doc.id})，已跳过")
 
                     # 隐藏下载任务
                     progress.update(download_task, visible=False)
@@ -630,6 +653,12 @@ class Application:
                 progress.advance(main_task)
 
         finalized = finalize_incremental(incremental_plan, nodes)
+        UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(pending_docs)}")
+        if failed_docs:
+            UI.warning(
+                f"失败 {len(failed_docs)} 篇: " + "、".join(failed_docs[:10])
+                + ("……" if len(failed_docs) > 10 else "")
+            )
         UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(pending_docs)}")
         if incremental:
             UI.info(f"未修改跳过: {len(skipped_uuids)} 篇")
