@@ -123,6 +123,7 @@ class YuqueClient(ExportDownloadMixin):
     FAVORITES_PAGE = "https://www.yuque.com/dashboard/collections"
     API_DOC_EXPORT = "https://www.yuque.com/api/docs/{doc_id}/export"
     API_DOC_CREATE = "https://www.yuque.com/api/docs"
+    API_BOOK_CREATE = "https://www.yuque.com/api/books"
     DEFAULT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
     DEFAULT_EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
     MAX_IMAGE_DOWNLOAD_SECONDS = 120
@@ -309,12 +310,15 @@ class YuqueClient(ExportDownloadMixin):
 
         Verified against the live frontend bundle (``POST /api/docs`` with
         ``book_id/title/body/type=Doc/format=markdown``) using the user's own
-        browser session (cookies + CSRF). Raises RepositoryResolutionError
+        browser session (cookies + CSRF). The document is mounted at the end
+        of the root catalog (``insert_to_catalog/insert``) so it shows in the
+        sidebar instead of being URL-only. Raises RepositoryResolutionError
         subclasses on failure so callers stay fail-closed.
         """
         normalized_title = title.strip()
         if not normalized_title:
             raise RepositoryResponseError("document title cannot be empty")
+        target_uuid = self._last_root_catalog_uuid(repo)
         payload = {
             "book_id": repo.id,
             "title": normalized_title,
@@ -322,6 +326,10 @@ class YuqueClient(ExportDownloadMixin):
             "type": "Doc",
             "format": "markdown",
         }
+        if target_uuid:
+            payload["insert_to_catalog"] = True
+            payload["target_uuid"] = target_uuid
+            payload["action"] = "insert"
         result = self._request_json("POST", self.API_DOC_CREATE, json=payload)
         if result.status_code == 401:
             raise RepositoryAuthenticationError("Yuque session is not authenticated")
@@ -349,6 +357,82 @@ class YuqueClient(ExportDownloadMixin):
             slug=slug,
             book_id=repo.id,
         )
+
+    def _last_root_catalog_uuid(self, repo: Repository) -> str | None:
+        """Return the uuid of the last root-level catalog node, if any."""
+        try:
+            nodes = self.get_catalog_nodes(repo)
+        except RepositoryResolutionError:
+            return None
+        for node in reversed(nodes):
+            if not node.parent_uuid and node.uuid:
+                return node.uuid
+        return None
+
+    def create_repository(
+        self,
+        *,
+        name: str,
+        slug: str | None = None,
+        description: str = "",
+        visibility: str = "private",
+    ) -> Repository:
+        """Create one repository via the same protocol the web UI uses.
+
+        Verified live (``POST /api/books`` with ``name/slug/description/
+        public``) using the user's own browser session. ``visibility`` accepts
+        ``private`` (default) or ``public``; ``team`` is sent as private since
+        the books endpoint has no team flag. Raises RepositoryResolutionError
+        subclasses on failure so callers stay fail-closed.
+        """
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise RepositoryResponseError("repository name cannot be empty")
+        if len(normalized_name) > 200:
+            raise RepositoryResponseError("repository name is too long")
+        payload: dict[str, object] = {
+            "name": normalized_name,
+            "description": description.strip(),
+            "public": 1 if visibility == "public" else 0,
+        }
+        if slug:
+            payload["slug"] = slug.strip()
+        result = self._request_json("POST", self.API_BOOK_CREATE, json=payload)
+        if result.status_code == 401:
+            raise RepositoryAuthenticationError("Yuque session is not authenticated")
+        if result.status_code == 403:
+            raise RepositoryAccessDeniedError("Yuque denied repository creation")
+        if result.status_code != 200:
+            raise RepositoryTransportError(
+                f"Yuque repository creation failed with status {result.status_code}"
+            )
+        if not isinstance(result.payload, dict):
+            raise RepositoryResponseError("Yuque returned invalid repository JSON")
+        data = result.payload.get("data", {})
+        if not isinstance(data, dict):
+            raise RepositoryResponseError("Yuque returned invalid repository data")
+        if not isinstance(data.get("user"), dict):
+            login = self._current_user_login()
+            if login:
+                data = {**data, "user": {"login": login}}
+        try:
+            return RepositoryResolver.repository_from_payload(data)
+        except RepositoryResolutionError as exc:
+            raise RepositoryResponseError("Yuque did not confirm the created repository") from exc
+
+    def _current_user_login(self) -> str | None:
+        """Return the current session login for payloads that omit it."""
+        try:
+            result = self._request_json("GET", f"{self.BASE_URL}/api/mine")
+        except RepositoryResolutionError:
+            return None
+        if not isinstance(result.payload, dict):
+            return None
+        data = result.payload.get("data", {})
+        if not isinstance(data, dict):
+            return None
+        login = data.get("login")
+        return login if isinstance(login, str) and login else None
 
     def document_url(self, repo: Repository, doc: Document) -> str:
         """Build the canonical URL for a document in a repository."""

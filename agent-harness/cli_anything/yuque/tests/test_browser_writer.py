@@ -217,3 +217,25 @@ def test_click_failure_keeps_cause_and_diagnostics(tmp_path: Path) -> None:
     assert exc_info.value.__cause__ is not None
     assert "state=" in str(exc_info.value)
     assert "url=" in str(exc_info.value)
+
+
+class NoneElementStub:
+    """Mimic DrissionPage NoneElement: falsy, but .states raises."""
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __getattr__(self, name: str):
+        raise LookupError(f"no {name}")
+
+
+def test_find_skips_none_element_without_leaking() -> None:
+    page = FakePage({"text:新建文档"})
+    page.ele = lambda selector, timeout=0: NoneElementStub()  # type: ignore[method-assign]
+    page.eles = lambda selector, timeout=0: []  # type: ignore[method-assign]
+
+    with pytest.raises(MutationProtocolError, match="does not expose"):
+        YuqueBrowserWriter(page)._find(("css:input[name='name']",), "name")
+
+    assert YuqueBrowserWriter._is_missing(NoneElementStub()) is True
+    assert YuqueBrowserWriter(page)._describe(NoneElementStub()) == "missing"

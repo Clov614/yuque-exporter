@@ -134,12 +134,23 @@ class YuqueBrowserWriter:
             except Exception:  # noqa: BLE001
                 return []
             if found:
-                return list(found)
+                return [element for element in list(found) if not self._is_missing(element)]
         try:
             element = self.page.ele(selector, timeout=self.FIND_TIMEOUT)
         except Exception:  # noqa: BLE001
             return []
-        return [element] if element is not None else []
+        return [] if self._is_missing(element) else [element]
+
+    @staticmethod
+    def _is_missing(element: Any) -> bool:
+        if element is None:
+            return True
+        if type(element).__name__ == "NoneElement":
+            return True
+        try:
+            return not element
+        except Exception:  # noqa: BLE001
+            return True
 
     def _first_candidate(self, selector: str) -> Any | None:
         candidates = self._candidates(selector)
@@ -156,7 +167,11 @@ class YuqueBrowserWriter:
 
     @staticmethod
     def _is_actionable(element: Any) -> bool:
-        states = getattr(element, "states", None)
+        try:
+            states = getattr(element, "states", None)
+        except Exception:  # noqa: BLE001
+            # NoneElement.__getattr__ raises ElementNotFoundError, not AttributeError.
+            return False
         if states is None:
             return True
         try:
@@ -165,7 +180,10 @@ class YuqueBrowserWriter:
             return True
 
     def _describe(self, element: Any) -> str:
-        states = getattr(element, "states", None)
+        try:
+            states = getattr(element, "states", None)
+        except Exception:  # noqa: BLE001
+            return "missing"
         if states is None:
             return "unknown"
         parts = []

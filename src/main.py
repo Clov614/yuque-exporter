@@ -147,7 +147,7 @@ class Application:
             )
 
     def create_repository_flow(self) -> None:
-        """Create one private-by-default repository through the browser UI."""
+        """Create one private-by-default repository, protocol first."""
         client = self._require_client()
         name = UI.ask_text("请输入知识库名称")
         if not name:
@@ -163,16 +163,29 @@ class Application:
         if not UI.ask_confirm("确认创建知识库？", default=False):
             return
         try:
-            namespace = YuqueBrowserWriter(self.page).create_repository(
+            repository = client.create_repository(
                 name=name,
                 slug=slug,
                 description=description,
                 visibility=visibility_value,
             )
-            repository = client.get_repository(namespace)
-        except (MutationError, RepositoryResolutionError) as exc:
-            UI.error(f"创建知识库失败: {self._describe_write_error(exc)}")
-            return
+        except RepositoryResolutionError as exc:
+            if not self._is_protocol_unsupported(exc):
+                UI.error(f"创建知识库失败: {self._describe_write_error(exc)}")
+                return
+            try:
+                namespace = YuqueBrowserWriter(self.page).create_repository(
+                    name=name,
+                    slug=slug,
+                    description=description,
+                    visibility=visibility_value,
+                )
+                repository = client.get_repository(namespace)
+            except (MutationError, RepositoryResolutionError) as fallback_exc:
+                UI.error(
+                    f"创建知识库失败: {self._describe_write_error(fallback_exc)}"
+                )
+                return
         UI.success(f"知识库创建成功：{repository.name} ({repository.url})")
 
     def import_markdown_flow(self) -> None:
@@ -216,6 +229,12 @@ class Application:
         if cause is None or str(cause) == str(exc):
             return str(exc)
         return f"{exc}（原因: {cause}）"
+
+    @staticmethod
+    def _is_protocol_unsupported(exc: Exception) -> bool:
+        """Only fall back to browser UI when the protocol itself is unavailable."""
+        message = str(exc).lower()
+        return "status 404" in message or "status 405" in message or "not found" in message
 
     def _require_client(self) -> YuqueClient:
         if self.client is None:

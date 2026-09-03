@@ -484,9 +484,11 @@ def _create_repo() -> Repository:
 
 
 def test_create_markdown_document_uses_docs_protocol() -> None:
-    client, session = client_with(
-        FakeResponse(200, {"data": {"id": 777, "slug": "note", "title": "Note"}})
-    )
+    catalog = FakeResponse(200, {"data": []})
+    created = FakeResponse(200, {"data": {"id": 777, "slug": "note", "title": "Note"}})
+    client = YuqueClient(FakeTab())
+    session = SequenceSession([catalog, created])
+    client.session = session  # type: ignore[assignment]
     repo = _create_repo()
 
     doc = client.create_markdown_document(repo, "Note", "# Note\n")
@@ -494,20 +496,67 @@ def test_create_markdown_document_uses_docs_protocol() -> None:
     assert doc.id == 777
     assert doc.slug == "note"
     assert client.document_url(repo, doc) == "https://www.yuque.com/tester/existing-book/note"
-    call = session.calls[0]
+    call = session.calls[1]
     assert call["method"] == "POST"
     assert call["url"] == "https://www.yuque.com/api/docs"
     assert call["json"]["book_id"] == 42
     assert call["json"]["format"] == "markdown"
     assert call["json"]["type"] == "Doc"
+    assert "insert_to_catalog" not in call["json"]
 
 
 def test_create_markdown_document_maps_auth_and_rejects_bad_payload() -> None:
     repo = _create_repo()
-    client, _ = client_with(FakeResponse(401, {"message": "Unauthorized"}))
+    catalog = FakeResponse(200, {"data": []})
+    client = YuqueClient(FakeTab())
+    client.session = SequenceSession(  # type: ignore[assignment]
+        [catalog, FakeResponse(401, {"message": "Unauthorized"})]
+    )
     with pytest.raises(RepositoryAuthenticationError):
         client.create_markdown_document(repo, "Note", "body")
 
-    client, _ = client_with(FakeResponse(200, {"data": {"id": "bad"}}))
+    client = YuqueClient(FakeTab())
+    client.session = SequenceSession(  # type: ignore[assignment]
+        [catalog, FakeResponse(200, {"data": {"id": "bad"}})]
+    )
     with pytest.raises(RepositoryResponseError):
         client.create_markdown_document(repo, "Note", "body")
+
+
+def test_create_markdown_document_mounts_to_catalog() -> None:
+    repo = _create_repo()
+    catalog = FakeResponse(
+        200,
+        {"data": [{"uuid": "root-uuid", "parent_uuid": "", "type": "DOC",
+                   "title": "Old", "doc_id": 1, "id": 1, "url": "old"}]},
+    )
+    created = FakeResponse(200, {"data": {"id": 778, "slug": "new", "title": "New"}})
+    client = YuqueClient(FakeTab())
+    session = SequenceSession([catalog, created])
+    client.session = session  # type: ignore[assignment]
+
+    doc = client.create_markdown_document(repo, "New", "# New\n")
+
+    assert doc.id == 778
+    create_call = session.calls[1]
+    assert create_call["json"]["insert_to_catalog"] is True
+    assert create_call["json"]["target_uuid"] == "root-uuid"
+    assert create_call["json"]["action"] == "insert"
+
+
+def test_create_repository_uses_books_protocol() -> None:
+    client, session = client_with(
+        FakeResponse(200, {"data": {"id": 99, "name": "New", "slug": "new",
+                                    "user": {"login": "tester"}}})
+    )
+
+    repo = client.create_repository(name="New", slug="new", description="d",
+                                    visibility="private")
+
+    assert repo.id == 99
+    assert repo.user_login == "tester"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://www.yuque.com/api/books"
+    assert call["json"]["name"] == "New"
+    assert call["json"]["public"] == 0
