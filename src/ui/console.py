@@ -21,9 +21,13 @@ class UI:
     
     @staticmethod
     def print_banner():
+        try:
+            from core.version import __version__ as app_version
+        except ImportError:
+            app_version = "1.0.0"
         console.print(Panel.fit(
             "[bold green]语雀批量导出工具 (Yuque Exporter)[/bold green]\n"
-            "[dim]版本: 1.0.0 | 作者: Clov614[/dim]",
+            f"[dim]版本: {app_version} | 作者: Clov614[/dim]",
             border_style="green"
         ))
     
