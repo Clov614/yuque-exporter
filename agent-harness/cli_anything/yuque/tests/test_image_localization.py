@@ -29,7 +29,8 @@ class RecordingImageClient:
 
 
 def _image_targets(markdown: str) -> list[str]:
-    return re.findall(r"!\[[^]]*\]\((\./[^)]+)\)", markdown)
+    raw = re.findall(r"!\[[^]]*\]\(\s*(<[^>\n]+>|[^)\s]+)", markdown)
+    return [target[1:-1] if target.startswith("<") else target for target in raw]
 
 
 def test_add_metadata_writes_parseable_unindented_front_matter(tmp_path: Path) -> None:
@@ -188,3 +189,30 @@ def test_localize_images_stops_after_document_byte_budget(
     assert result.downloaded_count == 1
     assert result.skipped_count == 2
     assert len(list((tmp_path / "budget.assets").iterdir())) == 1
+
+
+def test_localize_images_encodes_asset_paths_with_spaces_for_preview(tmp_path: Path) -> None:
+    markdown_path = tmp_path / "💡 1 分钟玩转语雀文档.md"
+    source_url = "https://images.example.test/cover.png"
+    markdown_path.write_text(f"![cover]({source_url})\n", encoding="utf-8")
+    client = RecordingImageClient()
+
+    result = DocumentExporter().localize_images(markdown_path, client.download_external_image)
+
+    localized = markdown_path.read_text(encoding="utf-8")
+    assert result.downloaded_count == 1
+    assert "%20" in localized
+    assert "1 分钟" not in localized.split("](", 1)[1]
+    targets = _image_targets(localized)
+    assert len(targets) == 1
+    assert targets[0].startswith("./%")
+    from urllib.parse import unquote
+
+    assert (tmp_path / unquote(targets[0][2:])).is_file()
+
+
+def test_format_asset_destination_keeps_slashes_and_encodes_segments() -> None:
+    formatted = DocumentExporter.format_asset_destination("./a b.assets/x y.png")
+
+    assert formatted == "<./a%20b.assets/x%20y.png>"
+    assert DocumentExporter.format_asset_destination("./plain.assets/x.png") == "<./plain.assets/x.png>"

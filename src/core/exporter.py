@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable, Optional
-from urllib.parse import unquote, urldefrag, urlparse
+from urllib.parse import quote, unquote, urldefrag, urlparse
 
 from .models import Document
 
@@ -225,7 +225,8 @@ class DocumentExporter:
     ) -> tuple[Optional[str], str, int]:
         asset_name = self._asset_filename(url)
         asset_path = assets_dir / asset_name
-        relative_path = f"./{markdown_path.stem}.assets/{asset_name}"
+        raw_relative_path = f"./{markdown_path.stem}.assets/{asset_name}"
+        relative_path = self._markdown_destination(raw_relative_path)
         if asset_path.is_file() and asset_path.stat().st_size > 0:
             return relative_path, "skipped", asset_path.stat().st_size
 
@@ -243,6 +244,28 @@ class DocumentExporter:
             except OSError:
                 pass
         return None, "failed", 0
+
+    @staticmethod
+    def format_asset_destination(raw_relative_path: str) -> str:
+        """Format a relative asset path for use inside ``![](...)``.
+
+        Filesystem paths may contain spaces or non-ASCII characters that
+        break CommonMark link destinations, so each path segment is
+        percent-encoded. Angle brackets keep destinations with special
+        characters parseable by Markdown preview renderers.
+        """
+        segments = raw_relative_path.split("/")
+        encoded = "/".join(
+            quote(segment, safe="-_.~!$&'()*+,;=:@%")
+            if index > 0 or segment not in {".", ".."}
+            else segment
+            for index, segment in enumerate(segments)
+        )
+        return f"<{encoded}>"
+
+    @staticmethod
+    def _markdown_destination(raw_relative_path: str) -> str:
+        return DocumentExporter.format_asset_destination(raw_relative_path)
 
     @staticmethod
     def _replace_image_references(
