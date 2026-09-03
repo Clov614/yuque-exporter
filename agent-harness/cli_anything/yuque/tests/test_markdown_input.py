@@ -8,7 +8,11 @@ from cli_anything.yuque.core.project import ensure_src_on_path
 
 ensure_src_on_path()
 
-from core.markdown_input import DEFAULT_MAX_MARKDOWN_BYTES, read_markdown  # type: ignore  # noqa: E402
+from core.markdown_input import (  # type: ignore  # noqa: E402
+    DEFAULT_MAX_MARKDOWN_BYTES,
+    normalize_markdown_path_input,
+    read_markdown,
+)
 from core.mutation_errors import MarkdownInputError  # type: ignore  # noqa: E402
 
 
@@ -72,3 +76,19 @@ def test_read_markdown_rejects_oversized_input(tmp_path: Path) -> None:
 
 def test_default_markdown_limit_is_bounded() -> None:
     assert DEFAULT_MAX_MARKDOWN_BYTES > 0
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_read_markdown_accepts_quoted_pasted_path(tmp_path: Path, quote: str) -> None:
+    path = tmp_path / "note.md"
+    path.write_text("# Note\n", encoding="utf-8")
+    quoted = f"{quote}  {path}  {quote}"
+
+    document = read_markdown(quoted)
+
+    assert document.path == path.resolve()
+
+
+def test_normalize_path_keeps_unbalanced_quotes() -> None:
+    assert normalize_markdown_path_input('"note.md') == '"note.md'
+    assert normalize_markdown_path_input("  note.md  ") == "note.md"

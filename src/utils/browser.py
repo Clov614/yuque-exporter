@@ -64,10 +64,18 @@ class BrowserManager:
         try:
             self.page = ChromiumPage(co)
             self._is_headless = headless
-            
+
             # 设置一些基础属性
-            self.page.set.window.max() if not headless else None
-            
+            if headless:
+                # 无头默认视口过小会导致下拉菜单/弹窗在视口外点不动，
+                # 这里对齐有头最大化的效果。
+                try:
+                    self.page.set.window.size(1920, 1080)
+                except Exception:
+                    pass
+            else:
+                self.page.set.window.max()
+
             return self.page
         except Exception as e:
             if self._lock_context is not None:

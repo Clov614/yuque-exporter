@@ -171,7 +171,7 @@ class Application:
             )
             repository = client.get_repository(namespace)
         except (MutationError, RepositoryResolutionError) as exc:
-            UI.error(f"创建知识库失败: {exc}")
+            UI.error(f"创建知识库失败: {self._describe_write_error(exc)}")
             return
         UI.success(f"知识库创建成功：{repository.name} ({repository.url})")
 
@@ -202,9 +202,16 @@ class Application:
         try:
             url = YuqueBrowserWriter(self.page).import_markdown(repository, document)
         except (MutationError, RepositoryResolutionError) as exc:
-            UI.error(f"导入 Markdown 失败: {exc}")
+            UI.error(f"导入 Markdown 失败: {self._describe_write_error(exc)}")
             return
         UI.success(f"Markdown 导入成功：{url}")
+
+    @staticmethod
+    def _describe_write_error(exc: Exception) -> str:
+        cause = exc.__cause__
+        if cause is None or str(cause) == str(exc):
+            return str(exc)
+        return f"{exc}（原因: {cause}）"
 
     def _require_client(self) -> YuqueClient:
         if self.client is None:

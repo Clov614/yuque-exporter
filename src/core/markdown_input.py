@@ -13,6 +13,21 @@ _TITLE_RE = re.compile(r"^\s*#\s+(.+?)\s*#*\s*$", re.MULTILINE)
 _FRONT_MATTER_TITLE_RE = re.compile(r"^title\s*:\s*(?P<value>.*)\s*$", re.MULTILINE)
 
 
+def normalize_markdown_path_input(raw: str | Path) -> str:
+    """Strip whitespace and one pair of surrounding quotes from a pasted path.
+
+    Windows consoles and file managers often paste paths wrapped in double
+    quotes (``"F:\\a\\b.md"``) when the path contains spaces or CJK
+    characters. Those quotes are not part of the file name and must be
+    removed before ``Path`` validation. Only one matched pair is stripped so
+    unbalanced quotes stay visible as an input error.
+    """
+    text = str(raw).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("\"", "'"):
+        text = text[1:-1].strip()
+    return text
+
+
 @dataclass(frozen=True)
 class MarkdownDocument:
     path: Path
@@ -30,7 +45,7 @@ def read_markdown(
     if max_bytes <= 0:
         raise MarkdownInputError("Markdown file size limit must be positive")
 
-    candidate = Path(path).expanduser()
+    candidate = Path(normalize_markdown_path_input(path)).expanduser()
     if candidate.is_symlink():
         raise MarkdownInputError("Markdown symlinks are not supported")
     if not candidate.exists():
