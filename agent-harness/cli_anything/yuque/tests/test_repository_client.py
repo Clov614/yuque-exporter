@@ -477,3 +477,37 @@ def test_get_document_updated_at_retries_with_slug() -> None:
     assert client.get_document_updated_at(_detail_doc()) == "2026-09-03T00:00:00Z"
     assert session.calls[0]["url"] == "https://www.yuque.com/api/docs/7"
     assert session.calls[1]["url"] == "https://www.yuque.com/api/docs/document"
+
+
+def _create_repo() -> Repository:
+    return Repository(id=42, name="Existing", slug="existing-book", user_login="tester")
+
+
+def test_create_markdown_document_uses_docs_protocol() -> None:
+    client, session = client_with(
+        FakeResponse(200, {"data": {"id": 777, "slug": "note", "title": "Note"}})
+    )
+    repo = _create_repo()
+
+    doc = client.create_markdown_document(repo, "Note", "# Note\n")
+
+    assert doc.id == 777
+    assert doc.slug == "note"
+    assert client.document_url(repo, doc) == "https://www.yuque.com/tester/existing-book/note"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://www.yuque.com/api/docs"
+    assert call["json"]["book_id"] == 42
+    assert call["json"]["format"] == "markdown"
+    assert call["json"]["type"] == "Doc"
+
+
+def test_create_markdown_document_maps_auth_and_rejects_bad_payload() -> None:
+    repo = _create_repo()
+    client, _ = client_with(FakeResponse(401, {"message": "Unauthorized"}))
+    with pytest.raises(RepositoryAuthenticationError):
+        client.create_markdown_document(repo, "Note", "body")
+
+    client, _ = client_with(FakeResponse(200, {"data": {"id": "bad"}}))
+    with pytest.raises(RepositoryResponseError):
+        client.create_markdown_document(repo, "Note", "body")

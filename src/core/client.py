@@ -20,7 +20,10 @@ from .auth import YuqueAuth, LoginStatus, is_authenticated_yuque_url
 from .models import Repository, Document
 from .repository_reference import RepositoryReference
 from .repository_resolver import (
+    RepositoryAccessDeniedError,
+    RepositoryAuthenticationError,
     RepositoryHttpResult,
+    RepositoryNotFoundError,
     RepositoryResolutionError,
     RepositoryResolver,
     RepositoryResponseError,
@@ -119,6 +122,7 @@ class YuqueClient(ExportDownloadMixin):
     API_COMMON_USED = "https://www.yuque.com/api/mine/common_used"
     FAVORITES_PAGE = "https://www.yuque.com/dashboard/collections"
     API_DOC_EXPORT = "https://www.yuque.com/api/docs/{doc_id}/export"
+    API_DOC_CREATE = "https://www.yuque.com/api/docs"
     DEFAULT_IMAGE_MAX_BYTES = 20 * 1024 * 1024
     DEFAULT_EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024
     MAX_IMAGE_DOWNLOAD_SECONDS = 120
@@ -294,6 +298,61 @@ class YuqueClient(ExportDownloadMixin):
             return str(updated_at) if updated_at else None
         except (RepositoryResolutionError, RepositoryTransportError, ValueError, TypeError):
             return None
+
+    def create_markdown_document(
+        self,
+        repo: Repository,
+        title: str,
+        body: str,
+    ) -> Document:
+        """Create one Markdown document via the same protocol the web UI uses.
+
+        Verified against the live frontend bundle (``POST /api/docs`` with
+        ``book_id/title/body/type=Doc/format=markdown``) using the user's own
+        browser session (cookies + CSRF). Raises RepositoryResolutionError
+        subclasses on failure so callers stay fail-closed.
+        """
+        normalized_title = title.strip()
+        if not normalized_title:
+            raise RepositoryResponseError("document title cannot be empty")
+        payload = {
+            "book_id": repo.id,
+            "title": normalized_title,
+            "body": body,
+            "type": "Doc",
+            "format": "markdown",
+        }
+        result = self._request_json("POST", self.API_DOC_CREATE, json=payload)
+        if result.status_code == 401:
+            raise RepositoryAuthenticationError("Yuque session is not authenticated")
+        if result.status_code == 403:
+            raise RepositoryAccessDeniedError("Yuque denied document creation")
+        if result.status_code == 404:
+            raise RepositoryNotFoundError("Yuque repository was not found")
+        if result.status_code != 200:
+            raise RepositoryTransportError(
+                f"Yuque document creation failed with status {result.status_code}"
+            )
+        if not isinstance(result.payload, dict):
+            raise RepositoryResponseError("Yuque returned invalid document JSON")
+        data = result.payload.get("data", {})
+        if not isinstance(data, dict):
+            raise RepositoryResponseError("Yuque returned invalid document data")
+        doc_id = data.get("id")
+        slug = data.get("slug")
+        if not isinstance(doc_id, int) or not isinstance(slug, str) or not slug:
+            raise RepositoryResponseError("Yuque did not confirm the created document")
+        return Document(
+            id=doc_id,
+            doc_id=doc_id,
+            title=str(data.get("title") or normalized_title),
+            slug=slug,
+            book_id=repo.id,
+        )
+
+    def document_url(self, repo: Repository, doc: Document) -> str:
+        """Build the canonical URL for a document in a repository."""
+        return f"{self.BASE_URL}/{repo.user_login}/{repo.slug}/{doc.slug}"
 
     def export_document(
         self, 

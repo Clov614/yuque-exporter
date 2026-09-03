@@ -177,6 +177,7 @@ class Application:
 
     def import_markdown_flow(self) -> None:
         """Import one Markdown file into exactly one selected repository."""
+        client = self._require_client()
         repository = self._select_single_repository()
         if repository is None:
             return
@@ -200,8 +201,11 @@ class Application:
         if not UI.ask_confirm("确认导入 Markdown？", default=False):
             return
         try:
-            url = YuqueBrowserWriter(self.page).import_markdown(repository, document)
-        except (MutationError, RepositoryResolutionError) as exc:
+            created = client.create_markdown_document(
+                repository, document.title, document.body
+            )
+            url = client.document_url(repository, created)
+        except RepositoryResolutionError as exc:
             UI.error(f"导入 Markdown 失败: {self._describe_write_error(exc)}")
             return
         UI.success(f"Markdown 导入成功：{url}")

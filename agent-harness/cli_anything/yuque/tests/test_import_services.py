@@ -12,7 +12,7 @@ from cli_anything.yuque.core import importer as importer_mod  # noqa: E402
 from cli_anything.yuque.core import repo as repo_mod  # noqa: E402
 from cli_anything.yuque.core.importer import ImportService  # noqa: E402
 from cli_anything.yuque.core.repo import RepoService  # noqa: E402
-from core.models import Repository  # type: ignore  # noqa: E402
+from core.models import Document, Repository  # type: ignore  # noqa: E402
 from core.mutation_errors import (  # type: ignore  # noqa: E402
     MutationConfirmationRequired,
     MutationProtocolError,
@@ -57,12 +57,26 @@ class FakeProfileAuth:
 
 
 class FakeClient:
+    created: list[tuple[int, str]] = []
+
     def __init__(self, _page: object, auth: object = None) -> None:
         pass
 
     def get_repository(self, reference: object) -> Repository:
         assert getattr(reference, "canonical") == "tester/existing-book"
         return REPOSITORY
+
+    def create_markdown_document(
+        self, repository: Repository, title: str, body: str
+    ) -> Document:
+        assert repository.id == REPOSITORY.id
+        assert title
+        assert isinstance(body, str)
+        type(self).created.append((repository.id, title))
+        return Document(id=777, doc_id=777, title=title, slug="note", book_id=repository.id)
+
+    def document_url(self, repository: Repository, doc: Document) -> str:
+        return f"{repository.url}/{doc.slug}"
 
 
 class FakeWriter:
@@ -87,9 +101,9 @@ def reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeManager.quits = 0
     FakeWriter.imports = []
     FakeWriter.creates = []
+    FakeClient.created = []
     monkeypatch.setattr(importer_mod, "ProfileAuth", FakeProfileAuth)
     monkeypatch.setattr(importer_mod, "YuqueClient", FakeClient)
-    monkeypatch.setattr(importer_mod, "YuqueBrowserWriter", FakeWriter)
     monkeypatch.setattr(importer_mod, "append_audit", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(repo_mod, "ProfileAuth", FakeProfileAuth)
     monkeypatch.setattr(repo_mod, "YuqueClient", FakeClient)
@@ -118,7 +132,9 @@ def test_import_run_reads_file_and_releases_browser(tmp_path: Path) -> None:
     assert result["status"] == "created"
     assert result["title"] == "Note"
     assert result["repo"]["id"] == 42
-    assert FakeWriter.imports == [("existing-book", "Note")]
+    assert result["url"] == f"{REPOSITORY.url}/note"
+    assert FakeClient.created == [(42, "Note")]
+    assert FakeWriter.imports == []
     assert FakeManager.starts == 1
     assert FakeManager.quits == 1
 
@@ -136,6 +152,7 @@ def test_import_batch_validates_all_files_before_starting_browser(tmp_path: Path
 
     assert FakeManager.starts == 0
     assert FakeWriter.imports == []
+    assert FakeClient.created == []
 
 
 def test_repo_create_returns_resolved_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
