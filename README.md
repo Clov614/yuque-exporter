@@ -177,6 +177,16 @@ cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --down
 cli-anything-yuque export run --repo-id <repo_id> --format markdown --node <node_uuid> --profile default --json
 ```
 
+如需增量导出（只导出自上次以来有更新的文档，未修改的跳过）：
+
+```bash
+cli-anything-yuque export run --repo-id <repo_id> --format markdown --all --incremental --profile default --json
+```
+
+增量状态记录在输出目录下的 `.yuque_export_state/<repo_id>.json`（随输出目录隔离，换目录即全新全量）；
+`--incremental` 仅支持 `--format markdown`，可与 `--node` 子集组合使用；
+语雀端已删除的文档对应的本地文件会被保留，仅在 JSON 结果的 `stale_files` 中汇总提示。
+
 #### 批量导出
 
 ```bash
@@ -191,6 +201,8 @@ cli-anything-yuque export batch \
 - `--format` 支持：`markdown | pdf | word | lake`
 - `export run/batch` 必须二选一：`--all` 或 `--node`
 - `--download-images` 默认关闭且仅可与 `--format markdown` 同时使用；JSON 结果会返回 `image_localization` 汇总
+- `--incremental` 默认关闭且仅可与 `--format markdown` 同时使用；JSON 结果会返回 `skipped` 计数、
+  `status` 为 `skipped` 的条目、`state_file` 路径与 `stale_files` 汇总
 
 ### 8) JSON 输出与退出码约定
 

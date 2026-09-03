@@ -21,6 +21,7 @@ from .models import Repository, Document
 from .repository_reference import RepositoryReference
 from .repository_resolver import (
     RepositoryHttpResult,
+    RepositoryResolutionError,
     RepositoryResolver,
     RepositoryResponseError,
     RepositoryTransportError,
@@ -255,6 +256,44 @@ class YuqueClient(ExportDownloadMixin):
         ]
         self._validate_catalog_graph(nodes)
         return nodes
+
+    def get_document_updated_at(self, doc: Document) -> Optional[str]:
+        """获取文档的服务端更新时间，用于增量导出对比。
+
+        catalog 接口不返回可信的 updated_at，因此增量判断必须走
+        单文档 detail 接口。任何失败（网络/鉴权/4xx/非法载荷）
+        一律返回 None，调用方按“视为已修改，重导”处理，绝不中断导出。
+        """
+        from urllib.parse import quote
+
+        candidates = []
+        if isinstance(doc.id, int) and doc.id > 0:
+            candidates.append(str(doc.id))
+        if isinstance(doc.slug, str) and doc.slug:
+            slug = quote(doc.slug.strip("/"), safe="")
+            if slug and slug not in candidates:
+                candidates.append(slug)
+        for identifier in candidates:
+            timestamp = self._fetch_document_updated_at(identifier, doc.book_id)
+            if timestamp:
+                return timestamp
+        return None
+
+    def _fetch_document_updated_at(self, identifier: str, book_id: int) -> Optional[str]:
+        url = f"{self.BASE_URL}/api/docs/{identifier}"
+        params = {"book_id": book_id} if book_id else None
+        try:
+            result = self._request_json("GET", url, params=params)
+            RepositoryResolver.raise_for_status(result.status_code)
+            if not isinstance(result.payload, dict):
+                return None
+            data = result.payload.get("data", {})
+            if not isinstance(data, dict):
+                return None
+            updated_at = data.get("updated_at") or data.get("content_updated_at")
+            return str(updated_at) if updated_at else None
+        except (RepositoryResolutionError, RepositoryTransportError, ValueError, TypeError):
+            return None
 
     def export_document(
         self, 

@@ -94,8 +94,12 @@ agent-harness/
 
 3. `export`
    - `export run --repo-id <id> ...` 或 `export run --repo <owner/slug|Yuque URL> ...`
-   - `export batch --repo-id <id>... --repo <owner/slug|Yuque URL>... [--download-images]`
+   - `export batch --repo-id <id>... --repo <owner/slug|Yuque URL>... [--download-images] [--incremental]`
    - `--download-images` 默认关闭且仅适用于 Markdown；图片部分失败不改变文档导出状态
+   - `--incremental` 默认关闭且仅适用于 Markdown：按服务端 `updated_at` 对比跳过未修改文档，
+     首次运行等价于全量并建立状态；状态文件位于 `<output-dir>/.yuque_export_state/<repo_id>.json`；
+     结果含 `skipped` 计数、`status=skipped` 条目与 `stale_files` 汇总（语雀已删文档的本地文件仅报告、不删除）；
+     可与 `--node` 子集组合使用
 
 4. `session`
    - `session init`

@@ -109,3 +109,22 @@ def test_browser_manager_reuses_live_page_and_switches_modes(
     assert second is not first
     assert FakeOptions.instances[-1].headless_value is False
     assert second.set.window.maximized is True
+
+
+def test_browser_manager_uses_free_port_without_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    FakeOptions.instances = []
+    FakePage.instances = []
+    monkeypatch.setattr(browser_module, "ChromiumOptions", FakeOptions)
+    monkeypatch.setattr(browser_module, "ChromiumPage", FakePage)
+
+    manager = BrowserManager()
+    page = manager.start(headless=True)
+
+    options = FakeOptions.instances[0]
+    assert options.user_data_path is None
+    assert options.auto_port_value is True
+    assert page is FakePage.instances[0]
+
+    manager.quit()

@@ -411,3 +411,69 @@ def test_client_rejects_malformed_list_entries(
             client.get_repositories()
         else:
             client.get_catalog_nodes(repository)
+
+
+def _detail_doc(doc_id: int = 7, slug: str = "document", book_id: int = 42):
+    from core.models import Document
+
+    return Document(
+        id=doc_id,
+        title="Document",
+        slug=slug,
+        uuid="doc-uuid",
+        parent_uuid="",
+        type="DOC",
+        doc_id=doc_id,
+        book_id=book_id,
+    )
+
+
+def test_get_document_updated_at_reads_doc_id_path() -> None:
+    client, session = client_with(
+        FakeResponse(200, {"data": {"id": 7, "updated_at": "2026-09-01T00:00:00Z"}})
+    )
+
+    assert client.get_document_updated_at(_detail_doc()) == "2026-09-01T00:00:00Z"
+    assert session.calls[0]["url"] == "https://www.yuque.com/api/docs/7"
+    assert session.calls[0]["params"] == {"book_id": 42}
+
+
+def test_get_document_updated_at_falls_back_to_content_updated_at() -> None:
+    client, _ = client_with(
+        FakeResponse(200, {"data": {"id": 7, "content_updated_at": "2026-09-02T00:00:00Z"}})
+    )
+
+    assert client.get_document_updated_at(_detail_doc()) == "2026-09-02T00:00:00Z"
+
+
+def test_get_document_updated_at_returns_none_without_timestamps() -> None:
+    client, _ = client_with(FakeResponse(200, {"data": {"id": 7}}))
+
+    assert client.get_document_updated_at(_detail_doc()) is None
+
+
+def test_get_document_updated_at_returns_none_on_http_error() -> None:
+    client, _ = client_with(FakeResponse(404, {"message": "not found"}))
+
+    assert client.get_document_updated_at(_detail_doc()) is None
+
+
+def test_get_document_updated_at_returns_none_on_invalid_payload() -> None:
+    client, _ = client_with(FakeResponse(200, {"data": [1, 2, 3]}))
+
+    assert client.get_document_updated_at(_detail_doc()) is None
+
+
+def test_get_document_updated_at_retries_with_slug() -> None:
+    client = YuqueClient(FakeTab())
+    session = SequenceSession(
+        [
+            FakeResponse(404, {"message": "not found"}),
+            FakeResponse(200, {"data": {"id": 7, "updated_at": "2026-09-03T00:00:00Z"}}),
+        ]
+    )
+    client.session = session  # type: ignore[assignment]
+
+    assert client.get_document_updated_at(_detail_doc()) == "2026-09-03T00:00:00Z"
+    assert session.calls[0]["url"] == "https://www.yuque.com/api/docs/7"
+    assert session.calls[1]["url"] == "https://www.yuque.com/api/docs/document"

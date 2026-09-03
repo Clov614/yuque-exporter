@@ -272,6 +272,12 @@ def export() -> None:
     default=False,
     help="Download HTTP(S) Markdown images into local .assets directories",
 )
+@click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help="Only export documents changed since the last run (markdown only)",
+)
 @common_cmd_options
 @click.pass_context
 def export_run(
@@ -282,6 +288,7 @@ def export_run(
     all_docs: bool,
     nodes: Iterable[str],
     download_images: bool,
+    incremental: bool,
     as_json: bool,
     profile: Optional[str],
     output_dir: Optional[str],
@@ -300,12 +307,18 @@ def export_run(
                 "--download-images requires --format markdown",
                 param_hint="--download-images",
             )
+        if incremental and validated_format != "markdown":
+            raise click.BadParameter(
+                "--incremental requires --format markdown",
+                param_hint="--incremental",
+            )
         return ExportService(_profile(ctx), _ctx_value(ctx, "output_dir")).run(
             **selector,
             fmt=validated_format,
             all_docs=all_docs,
             node_uuids=validated_nodes,
             download_images=download_images,
+            incremental=incremental,
         )
 
     _run(ctx, execute)
@@ -328,6 +341,12 @@ def export_run(
     default=False,
     help="Download HTTP(S) Markdown images into local .assets directories",
 )
+@click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help="Only export documents changed since the last run (markdown only)",
+)
 @common_cmd_options
 @click.pass_context
 def export_batch(
@@ -338,6 +357,7 @@ def export_batch(
     all_docs: bool,
     nodes: Iterable[str],
     download_images: bool,
+    incremental: bool,
     as_json: bool,
     profile: Optional[str],
     output_dir: Optional[str],
@@ -362,6 +382,11 @@ def export_batch(
                 "--download-images requires --format markdown",
                 param_hint="--download-images",
             )
+        if incremental and validated_format != "markdown":
+            raise click.BadParameter(
+                "--incremental requires --format markdown",
+                param_hint="--incremental",
+            )
         selectors = {
             **({"repo_ids": validated_repo_ids} if validated_repo_ids else {}),
             **({"repos": validated_repos} if validated_repos else {}),
@@ -372,6 +397,7 @@ def export_batch(
             all_docs=all_docs,
             node_uuids=validated_nodes,
             download_images=download_images,
+            incremental=incremental,
         )
 
     _run(ctx, execute)

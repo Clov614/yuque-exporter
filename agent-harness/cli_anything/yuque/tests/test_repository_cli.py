@@ -111,6 +111,7 @@ def test_export_run_accepts_repository_reference() -> None:
                 "all_docs": True,
                 "node_uuids": [],
                 "download_images": False,
+                "incremental": False,
             },
         )
     ]
@@ -193,6 +194,7 @@ def test_export_batch_accepts_mixed_repository_selectors() -> None:
                 "all_docs": True,
                 "node_uuids": [],
                 "download_images": False,
+                "incremental": False,
             },
         )
     ]
