@@ -13,8 +13,8 @@ ensure_src_on_path()
 from core.browser_writer import YuqueBrowserWriter  # type: ignore  # noqa: E402
 from core.client import YuqueClient  # type: ignore  # noqa: E402
 from core.mutation_errors import MutationConfirmationRequired  # type: ignore  # noqa: E402
-from core.repository_resolver import RepositoryAuthenticationError  # type: ignore  # noqa: E402
 from core.repository_reference import RepositoryReference  # type: ignore  # noqa: E402
+from core.repository_resolver import RepositoryAuthenticationError  # type: ignore  # noqa: E402
 
 
 class RepoService:

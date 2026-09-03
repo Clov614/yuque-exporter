@@ -64,7 +64,7 @@ def map_exception(exc: Exception) -> HarnessError:
         return HarnessError("bad_parameter", str(exc), EXIT_PARAM)
     if isinstance(exc, click.UsageError):
         return HarnessError("usage_error", str(exc), EXIT_PARAM)
-    if isinstance(exc, (MarkdownInputError,)):
+    if isinstance(exc, MarkdownInputError):
         return HarnessError("input_error", str(exc), EXIT_PARAM)
     if isinstance(exc, MutationConfirmationRequired):
         return HarnessError("confirmation_required", str(exc), EXIT_PARAM)
