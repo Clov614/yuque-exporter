@@ -49,7 +49,9 @@ class BrowserManager:
         if self.user_data_dir is not None:
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
             co.set_user_data_path(str(self.user_data_dir))
-            co.auto_port(True)
+        # 始终使用空闲端口，避免与用户桌面 Chrome（默认 9222）冲突；
+        # 桌面 Chrome 开着时也能正常启动独立的导出浏览器。
+        co.auto_port(True)
         # 优化配置（保留 Chromium 默认 sandbox）
         co.set_argument('--disable-gpu')
         co.mute(True) # 静音
