@@ -193,6 +193,26 @@ class UI:
             )
             
         console.print(table)
+
+    @staticmethod
+    def show_favorite_docs(docs: List[Any]):
+        table = Table(title="⭐ 收藏文档列表")
+        table.add_column("序号", style="dim", width=6)
+        table.add_column("文档名称", style="cyan")
+        table.add_column("归属", style="cyan")
+        table.add_column("收藏时间", style="dim")
+
+        for idx, doc in enumerate(docs, 1):
+            book_display = getattr(doc, "book_display", "") or ""
+            favorite_time = getattr(doc, "favorite_time", "") or ""
+            table.add_row(
+                str(idx),
+                getattr(doc, "title", ""),
+                book_display,
+                favorite_time or "-",
+            )
+
+        console.print(table)
         
     @staticmethod
     def create_progress():

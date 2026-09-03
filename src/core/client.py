@@ -30,6 +30,8 @@ from .repository_resolver import (
     RepositoryTransportError,
 )
 from .download_support import ExportDownloadMixin
+from .favorite_document import FavoriteDocument
+from .favorite_document_provider import FavoriteDocumentProvider
 from .favorite_repository_provider import FavoriteRepositoryProvider
 
 class ExportType(Enum):
@@ -227,6 +229,11 @@ class YuqueClient(ExportDownloadMixin):
             self.FAVORITES_PAGE,
         )
         return provider.list_repositories()
+
+    def get_favorite_documents(self) -> List[FavoriteDocument]:
+        """获取收藏页中标记为 Doc 的单篇文档收藏。"""
+        provider = FavoriteDocumentProvider(self._request_favorite_resource)
+        return provider.list_documents()
 
     def get_repositories(self) -> List[Repository]:
         """获取常用知识库列表。"""
