@@ -13,6 +13,14 @@ ensure_src_on_path()
 
 from core.client import ExportType, YuqueClient  # type: ignore  # noqa: E402
 from core.exporter import DocumentExporter  # type: ignore  # noqa: E402
+from core.incremental import (  # type: ignore  # noqa: E402
+    finalize as finalize_incremental,
+)
+from core.incremental import (  # type: ignore  # noqa: E402
+    plan_incremental,
+    record_exported,
+    stamp_metadata,
+)
 from core.repository_reference import RepositoryReference  # type: ignore  # noqa: E402
 from core.repository_resolver import RepositoryAuthenticationError  # type: ignore  # noqa: E402
 
@@ -38,11 +46,14 @@ class ExportService:
         node_uuids: Iterable[str] = (),
         download_images: bool = False,
         repo: str | None = None,
+        incremental: bool = False,
     ) -> Dict[str, Any]:
         if fmt not in FORMAT_TO_EXPORT_TYPE:
             raise ValueError(f"unsupported export format: {fmt}")
         if download_images and fmt != "markdown":
             raise ValueError("download_images requires markdown format")
+        if incremental and fmt != "markdown":
+            raise ValueError("incremental export requires markdown format")
         node_uuids = tuple(node_uuids)
         if all_docs == bool(node_uuids):
             raise ValueError("provide exactly one of all_docs or node_uuids")
@@ -76,11 +87,32 @@ class ExportService:
                 "skipped": 0,
             }
             path_map = _build_path_map(nodes)
+            extension = ".md" if fmt == "markdown" else f".{fmt}"
+            incremental_plan = plan_incremental(
+                client=client,
+                exporter=exporter,
+                repository=repository,
+                selected=selected,
+                path_map=path_map,
+                output_dir=self.output_dir,
+                incremental=incremental,
+                extension=extension,
+            )
+            skipped_uuids = incremental_plan.skipped_uuids
             for doc in selected:
+                if doc.uuid in skipped_uuids:
+                    save_path = incremental_plan.save_paths.get(doc.uuid)
+                    exported.append(
+                        {
+                            "doc": asdict(doc),
+                            "status": "skipped",
+                            "path": str(save_path) if save_path else "",
+                        }
+                    )
+                    continue
                 full_path = path_map.get(doc.uuid, "")
                 path_parts = full_path.split("/") if full_path else []
                 rel_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
-                extension = ".md" if fmt == "markdown" else f".{fmt}"
                 save_path = exporter.get_save_path(
                     doc,
                     repository.name,
@@ -96,8 +128,9 @@ class ExportService:
                 if url == "EMPTY_DOC":
                     save_path.touch(exist_ok=True)
                     if fmt == "markdown":
-                        exporter.add_metadata(save_path, doc)
+                        stamp_metadata(incremental_plan, exporter, save_path, doc)
                     exported.append({"doc": asdict(doc), "status": "empty", "path": str(save_path)})
+                    record_exported(incremental_plan, doc)
                     continue
 
                 if not url:
@@ -128,16 +161,25 @@ class ExportService:
                             "failed": image_summary["failed"] + len(image_result.failed_urls),
                             "skipped": image_summary["skipped"] + image_result.skipped_count,
                         }
-                    exporter.add_metadata(save_path, doc)
+                    stamp_metadata(incremental_plan, exporter, save_path, doc)
+                if ok:
+                    record_exported(incremental_plan, doc)
                 exported.append(item)
 
+            finalized = finalize_incremental(incremental_plan, nodes)
+            state_file = finalized["state_file"]
+            stale_files = finalized["stale"]
             summary = {
                 "repo": asdict(repository),
                 "format": fmt,
+                "incremental": incremental,
                 "requested": len(selected),
                 "success": len([x for x in exported if x["status"] in {"ok", "empty", "directory"}]),
+                "skipped": len([x for x in exported if x["status"] == "skipped"]),
                 "image_localization": image_summary,
                 "items": exported,
+                "stale_files": stale_files,
+                **({"state_file": state_file} if state_file else {}),
             }
             append_audit(
                 self.profile,
@@ -145,8 +187,10 @@ class ExportService:
                     "event": "export.run",
                     "repo_id": repository.id,
                     "format": fmt,
+                    "incremental": incremental,
                     "requested": summary["requested"],
                     "success": summary["success"],
+                    "skipped": summary["skipped"],
                 },
             )
             return summary
@@ -161,6 +205,7 @@ class ExportService:
         node_uuids: Iterable[str] = (),
         download_images: bool = False,
         repos: Iterable[str] = (),
+        incremental: bool = False,
     ) -> Dict[str, Any]:
         repo_id_values = tuple(repo_ids)
         repository_values = tuple(repos)
@@ -179,6 +224,7 @@ class ExportService:
                 all_docs=all_docs,
                 node_uuids=node_values,
                 download_images=download_images,
+                incremental=incremental,
             )
             for repository_id in repo_id_values
         ]
@@ -189,6 +235,7 @@ class ExportService:
                 all_docs=all_docs,
                 node_uuids=node_values,
                 download_images=download_images,
+                incremental=incremental,
             )
             for repository_reference in repository_values
         ]

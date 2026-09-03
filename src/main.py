@@ -14,6 +14,8 @@ sys.path.append(str(Path(__file__).parent))
 
 from core.client import YuqueClient, ExportType
 from core.auth import YuqueAuth, LoginStatus
+from core.incremental import finalize as finalize_incremental
+from core.incremental import plan_incremental, record_exported, stamp_metadata
 from core.models import Repository
 from core.exporter import DocumentExporter
 from core.repository_reference import RepositoryReferenceError
@@ -111,14 +113,24 @@ class Application:
             return
         export_type = format_map[fmt_choice]
         download_images = False
+        incremental = False
         if export_type == ExportType.MARKDOWN:
             download_images = UI.ask_confirm(
                 "是否将 Markdown 中的网络图片下载到本地？", default=False
             )
+            incremental = UI.ask_confirm(
+                "是否只导出有更新的文档（增量导出）？", default=False
+            )
 
         # Process each repo
         for repo in selected_repos:
-            self.process_repo_export(repo, export_type, download_images=download_images)
+            self.process_repo_export(
+                repo,
+                export_type,
+                download_images=download_images,
+                incremental=incremental,
+            )
+
 
     def _require_client(self) -> YuqueClient:
         if self.client is None:
@@ -224,6 +236,7 @@ class Application:
         repo: Repository,
         export_type: ExportType,
         download_images: bool = False,
+        incremental: bool = False,
     ) -> None:
         """处理单个知识库导出"""
         client = self._require_client()
@@ -322,42 +335,61 @@ class Application:
         if not target_docs:
             UI.warning("未包含任何有效文档")
             return
-        
+
+        # 增量模式仅支持 Markdown（与 CLI --incremental 保持一致）
+        if incremental and export_type != ExportType.MARKDOWN:
+            UI.warning("增量导出仅支持 Markdown 格式，已切换为全量导出")
+            incremental = False
+
         # Begin Export
-        UI.info(f"开始导出 {len(target_docs)} 篇文档...")
-        
         # 预计算路径映射
         path_map = self._build_path_map(nodes)
-        
+
+        ext = ".md" if export_type == ExportType.MARKDOWN else f".{export_type.value}"
+        incremental_plan = plan_incremental(
+            client=client,
+            exporter=self.exporter,
+            repository=repo,
+            selected=target_docs,
+            path_map=path_map,
+            output_dir=self.exporter.output_dir,
+            incremental=incremental,
+            extension=ext,
+        )
+        skipped_uuids = incremental_plan.skipped_uuids
+        pending_docs = [doc for doc in target_docs if doc.uuid not in skipped_uuids]
+        if incremental:
+            UI.info(
+                f"增量导出：共 {len(target_docs)} 篇，未修改跳过 {len(skipped_uuids)} 篇，"
+                f"待导出 {len(pending_docs)} 篇..."
+            )
+        else:
+            UI.info(f"开始导出 {len(target_docs)} 篇文档...")
+
         success_count = 0
         image_downloaded_count = 0
         image_failed_count = 0
         with UI.create_progress() as progress:
-            main_task = progress.add_task(f"导出 [{repo.name}]", total=len(target_docs))
-            
+            main_task = progress.add_task(f"导出 [{repo.name}]", total=len(pending_docs))
+
             # 创建下载任务 (隐藏，用于显示单个文件进度)
             download_task = progress.add_task("等待下载...", total=None, visible=False)
-            
-            for doc in target_docs:
+
+            for doc in pending_docs:
                 progress.update(main_task, description=f"处理: {doc.title}")
-                
+
                 # Calculate relative path
                 full_path_str = path_map.get(doc.uuid, "")
-                
+
                 if doc.type == "TITLE":
                     self.exporter.get_save_path(doc, repo.name, relative_path=full_path_str)
                     progress.advance(main_task)
                     continue
-                
+
                 path_parts = full_path_str.split("/")
                 relative_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
-                
+
                 url = client.export_document(doc, export_type)
-                
-                # Determine extension
-                ext = f".{export_type.value}"
-                if export_type == ExportType.MARKDOWN:
-                    ext = ".md"
 
                 save_path = self.exporter.get_save_path(doc, repo.name, extension=ext, relative_path=relative_dir)
 
@@ -368,8 +400,9 @@ class Application:
                     save_path.touch()
                     if export_type == ExportType.MARKDOWN:
                         # 对于 Markdown，可以写入标题作为元数据，即使内容为空
-                        self.exporter.add_metadata(save_path, doc)
+                        stamp_metadata(incremental_plan, self.exporter, save_path, doc)
                     success_count += 1
+                    record_exported(incremental_plan, doc)
                     progress.advance(main_task)
                     continue
 
@@ -381,10 +414,10 @@ class Application:
                             progress.update(download_task, total=total)
                         if chunk_size:
                             progress.advance(download_task, chunk_size)
-                    
+
                     # 重置下载任务
                     progress.reset(download_task, total=None, visible=False)
-                    
+
                     if client.download_file(url, str(save_path), progress_callback=update_progress):
                         if export_type == ExportType.MARKDOWN:
                             if download_images:
@@ -393,15 +426,24 @@ class Application:
                                 )
                                 image_downloaded_count += image_result.downloaded_count
                                 image_failed_count += len(image_result.failed_urls)
-                            self.exporter.add_metadata(save_path, doc)
+                            stamp_metadata(incremental_plan, self.exporter, save_path, doc)
                         success_count += 1
-                    
+                        record_exported(incremental_plan, doc)
+
                     # 隐藏下载任务
                     progress.update(download_task, visible=False)
-                
+
                 progress.advance(main_task)
-        
-        UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(target_docs)}")
+
+        finalized = finalize_incremental(incremental_plan, nodes)
+        UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(pending_docs)}")
+        if incremental:
+            UI.info(f"未修改跳过: {len(skipped_uuids)} 篇")
+            if finalized["stale"]:
+                UI.warning(
+                    "以下文档在语雀目录中已不存在（本地文件已保留，请自行处理）: "
+                    + ", ".join(finalized["stale"])
+                )
         if download_images:
             UI.info(
                 f"图片本地化: 成功 {image_downloaded_count} 张，失败 {image_failed_count} 张"
