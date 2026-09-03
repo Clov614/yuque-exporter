@@ -90,15 +90,17 @@ class UI:
 
     @staticmethod
     def ask_confirm(message: str, default: bool = False) -> bool:
-        """询问是否启用可选功能，非交互环境默认保持关闭。"""
+        """询问是否启用可选功能，问题文字自带默认选项说明。"""
+        hint = "（默认是，直接回车即可）" if default else "（默认否，直接回车即可）"
+        prompt = f"{message}{hint}"
         try:
-            answer = questionary.confirm(message, default=default).ask()
+            answer = questionary.confirm(prompt, default=default).ask()
             return default if answer is None else bool(answer)
         except Exception:
             suffix = "Y/n" if default else "y/N"
             while True:
                 try:
-                    value = input(f"{message} [{suffix}]: ").strip().lower()
+                    value = input(f"{prompt} [{suffix}]: ").strip().lower()
                     if not value:
                         return default
                     if value in {"y", "yes", "是"}:
