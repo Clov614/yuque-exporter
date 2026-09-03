@@ -6,17 +6,21 @@
 
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 # 添加 src 到路径以便导入 (开发模式)
 sys.path.append(str(Path(__file__).parent))
 
+from core.browser_writer import YuqueBrowserWriter
 from core.client import YuqueClient, ExportType
 from core.auth import YuqueAuth, LoginStatus
 from core.incremental import finalize as finalize_incremental
 from core.incremental import plan_incremental, record_exported, stamp_metadata
+from core.markdown_input import read_markdown
 from core.models import Repository
+from core.mutation_errors import MutationError
 from core.exporter import DocumentExporter
 from core.repository_reference import RepositoryReferenceError
 from core.repository_resolver import RepositoryResolutionError
@@ -82,11 +86,22 @@ class Application:
         while True:
             choice = UI.ask_choice(
                 "\n主菜单:",
-                ["📚 导出知识库", "👤 账号信息", "⚙️ 设置", "🚪 退出"]
+                [
+                    "📚 导出知识库",
+                    "📥 导入 Markdown",
+                    "🆕 新建知识库",
+                    "👤 账号信息",
+                    "⚙️ 设置",
+                    "🚪 退出",
+                ]
             )
             
             if choice == "📚 导出知识库":
                 self.export_flow()
+            elif choice == "📥 导入 Markdown":
+                self.import_markdown_flow()
+            elif choice == "🆕 新建知识库":
+                self.create_repository_flow()
             elif choice == "👤 账号信息":
                 self.show_account_info()
             elif choice == "⚙️ 设置":
@@ -131,6 +146,65 @@ class Application:
                 incremental=incremental,
             )
 
+    def create_repository_flow(self) -> None:
+        """Create one private-by-default repository through the browser UI."""
+        client = self._require_client()
+        name = UI.ask_text("请输入知识库名称")
+        if not name:
+            return
+        slug = UI.ask_text("请输入知识库 slug（可留空自动生成）")
+        description = UI.ask_text("请输入知识库描述（可留空）") or ""
+        visibility = UI.ask_choice("选择知识库可见性:", ["私有", "公开"])
+        visibility_value = "public" if visibility == "公开" else "private"
+        UI.info(
+            f"即将创建知识库：{name}；可见性：{visibility or '私有'}。"
+            "创建后不会自动导入文档。"
+        )
+        if not UI.ask_confirm("确认创建知识库？", default=False):
+            return
+        try:
+            namespace = YuqueBrowserWriter(self.page).create_repository(
+                name=name,
+                slug=slug,
+                description=description,
+                visibility=visibility_value,
+            )
+            repository = client.get_repository(namespace)
+        except (MutationError, RepositoryResolutionError) as exc:
+            UI.error(f"创建知识库失败: {exc}")
+            return
+        UI.success(f"知识库创建成功：{repository.name} ({repository.url})")
+
+    def import_markdown_flow(self) -> None:
+        """Import one Markdown file into exactly one selected repository."""
+        repository = self._select_single_repository()
+        if repository is None:
+            return
+        source = UI.ask_text("请输入 Markdown 文件路径")
+        if not source:
+            return
+        try:
+            document = read_markdown(source)
+        except MutationError as exc:
+            UI.error(f"读取 Markdown 失败: {exc}")
+            return
+        override_title = UI.ask_text(
+            f"请输入文档标题（留空使用：{document.title}）"
+        )
+        if override_title:
+            document = replace(document, title=override_title)
+        UI.info(
+            f"即将导入 [{repository.name}]：{document.title}，"
+            f"{document.byte_length} 字节；本次不会单独上传本地图片或附件。"
+        )
+        if not UI.ask_confirm("确认导入 Markdown？", default=False):
+            return
+        try:
+            url = YuqueBrowserWriter(self.page).import_markdown(repository, document)
+        except (MutationError, RepositoryResolutionError) as exc:
+            UI.error(f"导入 Markdown 失败: {exc}")
+            return
+        UI.success(f"Markdown 导入成功：{url}")
 
     def _require_client(self) -> YuqueClient:
         if self.client is None:
@@ -230,6 +304,96 @@ class Application:
             selected = (*selected, repository)
             if not UI.ask_confirm("是否继续添加另一个知识库？"):
                 return list(selected)
+
+    def _select_single_repository(self) -> Repository | None:
+        """Choose exactly one repository for Markdown import."""
+        source = UI.ask_choice(
+            "请选择知识库来源:",
+            [
+                "从常用知识库列表选择",
+                "从收藏知识库列表选择",
+                "通过 ID / namespace / URL 直接指定",
+            ],
+        )
+        if source == "通过 ID / namespace / URL 直接指定":
+            return self._select_single_direct_repository()
+        if source == "从常用知识库列表选择":
+            return self._select_single_from_common_repositories()
+        if source == "从收藏知识库列表选择":
+            return self._select_single_from_favorite_repositories()
+        return None
+
+    def _select_single_from_common_repositories(self) -> Repository | None:
+        client = self._require_client()
+        try:
+            with UI.create_progress() as progress:
+                task = progress.add_task("获取知识库列表...", total=None)
+                repositories = client.get_repositories()
+                progress.update(task, completed=100, visible=False)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取知识库列表失败: {exc}")
+            return None
+
+        if not repositories:
+            UI.warning("未找到常用知识库")
+            if UI.ask_confirm("是否改为直接输入知识库 ID、namespace 或 URL？"):
+                return self._select_single_direct_repository()
+            return None
+
+        return self._choose_single_repository(
+            repositories, "请选择要导入的知识库 (输入序号回车确认):"
+        )
+
+    def _select_single_from_favorite_repositories(self) -> Repository | None:
+        client = self._require_client()
+        try:
+            with UI.create_progress() as progress:
+                task = progress.add_task("获取收藏知识库列表...", total=None)
+                repositories = client.get_favorite_repositories()
+                progress.update(task, completed=100, visible=False)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取收藏知识库列表失败: {exc}")
+            return None
+
+        if not repositories:
+            UI.warning("未识别到收藏知识库；文档收藏不会升级为知识库收藏")
+            if UI.ask_confirm("是否改为直接输入知识库 ID、namespace 或 URL？"):
+                return self._select_single_direct_repository()
+            return None
+
+        return self._choose_single_repository(
+            repositories, "请选择要导入的收藏知识库 (输入序号回车确认):"
+        )
+
+    def _select_single_direct_repository(self) -> Repository | None:
+        client = self._require_client()
+        while True:
+            value = UI.ask_text("请输入知识库 ID、namespace 或 URL")
+            if not value:
+                return None
+            try:
+                return client.get_repository(value)
+            except (RepositoryReferenceError, RepositoryResolutionError) as exc:
+                UI.error(str(exc))
+                if UI.ask_confirm("输入无效，是否重试？"):
+                    continue
+                return None
+
+    def _choose_single_repository(
+        self, repositories: list[Repository], message: str
+    ) -> Repository | None:
+        UI.show_repos(repositories)
+        labels = [
+            f"[{index}] {repository.name}"
+            for index, repository in enumerate(repositories, 1)
+        ]
+        choice = UI.ask_choice(message, labels)
+        if choice is None:
+            return None
+        try:
+            return repositories[labels.index(choice)]
+        except ValueError:
+            return None
 
     def process_repo_export(
         self,

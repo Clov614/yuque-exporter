@@ -9,9 +9,19 @@ import click
 
 from .core.auth import ProfileAuth
 from .core.export import ExportService
+from .core.importer import ImportService
 from .core.project import ensure_src_on_path, project_info, project_paths
 from .core.repo import RepoService
 from .core.session import SessionStore
+from core.mutation_errors import (  # type: ignore  # noqa: E402
+    MarkdownInputError,
+    MutationAccessError,
+    MutationAuthenticationError,
+    MutationConfirmationRequired,
+    MutationConflictError,
+    MutationProtocolError,
+    MutationTimeoutError,
+)
 from core.repository_resolver import (  # type: ignore  # noqa: E402
     RepositoryAuthenticationError,
     RepositoryResolutionError,
@@ -20,11 +30,15 @@ from .utils.output import emit, failure, success
 from .utils.validators import (
     normalize_output_dir,
     validate_format,
+    validate_markdown_file,
     validate_node_values,
     validate_profile,
     validate_repo_id,
+    validate_repository_name,
     validate_repository_references,
     validate_repository_selector,
+    validate_repository_slug,
+    validate_visibility,
 )
 
 
@@ -50,8 +64,20 @@ def map_exception(exc: Exception) -> HarnessError:
         return HarnessError("bad_parameter", str(exc), EXIT_PARAM)
     if isinstance(exc, click.UsageError):
         return HarnessError("usage_error", str(exc), EXIT_PARAM)
-    if isinstance(exc, RepositoryAuthenticationError):
+    if isinstance(exc, (MarkdownInputError,)):
+        return HarnessError("input_error", str(exc), EXIT_PARAM)
+    if isinstance(exc, MutationConfirmationRequired):
+        return HarnessError("confirmation_required", str(exc), EXIT_PARAM)
+    if isinstance(exc, (MutationAuthenticationError, RepositoryAuthenticationError)):
         return HarnessError("auth_error", str(exc), EXIT_AUTH)
+    if isinstance(exc, MutationAccessError):
+        return HarnessError("access_error", str(exc), EXIT_REMOTE)
+    if isinstance(exc, MutationConflictError):
+        return HarnessError("conflict_error", str(exc), EXIT_REMOTE)
+    if isinstance(exc, MutationTimeoutError):
+        return HarnessError("ambiguous_write", str(exc), EXIT_REMOTE)
+    if isinstance(exc, MutationProtocolError):
+        return HarnessError("write_protocol_error", str(exc), EXIT_REMOTE)
     if isinstance(exc, RepositoryResolutionError):
         return HarnessError("remote_error", str(exc), EXIT_REMOTE)
 
@@ -251,6 +277,135 @@ def repo_tree(
     def execute() -> Dict[str, Any]:
         selector = _repository_selector_kwargs(repo_id, repo)
         return RepoService(_profile(ctx)).tree(**selector)
+
+    _run(ctx, execute)
+
+
+@repo.command("create")
+@click.option("--name", required=True)
+@click.option("--slug", default=None)
+@click.option("--description", default="")
+@click.option(
+    "--visibility",
+    type=click.Choice(["private", "public", "team"], case_sensitive=False),
+    default="private",
+    show_default=True,
+)
+@click.option("--yes", "confirmed", is_flag=True, help="Confirm the remote write")
+@click.option("--dry-run", is_flag=True, help="Validate without changing Yuque")
+@common_cmd_options
+@click.pass_context
+def repo_create(
+    ctx: click.Context,
+    name: str,
+    slug: str | None,
+    description: str,
+    visibility: str,
+    confirmed: bool,
+    dry_run: bool,
+    as_json: bool,
+    profile: Optional[str],
+    output_dir: Optional[str],
+    verbose: bool,
+) -> None:
+    _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
+
+    def execute() -> Dict[str, Any]:
+        validated_name = validate_repository_name(name)
+        validated_slug = validate_repository_slug(slug)
+        validated_visibility = validate_visibility(visibility.lower())
+        if not confirmed and not dry_run:
+            raise click.BadParameter("repo create requires --yes or --dry-run", param_hint="--yes")
+        return RepoService(_profile(ctx)).create(
+            name=validated_name,
+            slug=validated_slug,
+            description=description,
+            visibility=validated_visibility,
+            confirmed=confirmed,
+            dry_run=dry_run,
+        )
+
+    _run(ctx, execute)
+
+
+@cli.group("import")
+def import_group() -> None:
+    """Import Markdown through the authenticated Yuque browser."""
+
+
+@import_group.command("run")
+@click.option("--repo-id", type=int, default=None, help="Numeric Yuque repository ID")
+@click.option("--repo", default=None, help="Repository owner/slug or Yuque URL")
+@click.option("--file", "file_path", required=True, type=click.Path())
+@click.option("--title", default=None)
+@click.option("--yes", "confirmed", is_flag=True, help="Confirm the remote write")
+@click.option("--dry-run", is_flag=True, help="Validate without changing Yuque")
+@common_cmd_options
+@click.pass_context
+def import_run(
+    ctx: click.Context,
+    repo_id: int | None,
+    repo: str | None,
+    file_path: str,
+    title: str | None,
+    confirmed: bool,
+    dry_run: bool,
+    as_json: bool,
+    profile: Optional[str],
+    output_dir: Optional[str],
+    verbose: bool,
+) -> None:
+    _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
+
+    def execute() -> Dict[str, Any]:
+        selector = _repository_selector_kwargs(repo_id, repo)
+        validated_file = validate_markdown_file(file_path)
+        if not confirmed and not dry_run:
+            raise click.BadParameter("import run requires --yes or --dry-run", param_hint="--yes")
+        return ImportService(_profile(ctx)).run(
+            **selector,
+            file=validated_file,
+            title=title,
+            confirmed=confirmed,
+            dry_run=dry_run,
+        )
+
+    _run(ctx, execute)
+
+
+@import_group.command("batch")
+@click.option("--repo-id", type=int, default=None, help="Numeric Yuque repository ID")
+@click.option("--repo", default=None, help="Repository owner/slug or Yuque URL")
+@click.option("--file", "files", multiple=True, required=True, type=click.Path())
+@click.option("--yes", "confirmed", is_flag=True, help="Confirm the remote write")
+@click.option("--dry-run", is_flag=True, help="Validate without changing Yuque")
+@common_cmd_options
+@click.pass_context
+def import_batch(
+    ctx: click.Context,
+    repo_id: int | None,
+    repo: str | None,
+    files: Iterable[str],
+    confirmed: bool,
+    dry_run: bool,
+    as_json: bool,
+    profile: Optional[str],
+    output_dir: Optional[str],
+    verbose: bool,
+) -> None:
+    _apply_common_overrides(ctx, as_json, profile, output_dir, verbose)
+
+    def execute() -> Dict[str, Any]:
+        selector = _repository_selector_kwargs(repo_id, repo)
+        validated_files = tuple(validate_markdown_file(value) for value in files)
+        if not confirmed and not dry_run:
+            raise click.BadParameter("import batch requires --yes or --dry-run", param_hint="--yes")
+        return ImportService(_profile(ctx)).batch(
+            **selector,
+            files=validated_files,
+            confirmed=confirmed,
+            dry_run=dry_run,
+        )
 
     _run(ctx, execute)
 
