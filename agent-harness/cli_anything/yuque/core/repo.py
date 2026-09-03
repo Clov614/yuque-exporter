@@ -14,7 +14,10 @@ from core.browser_writer import YuqueBrowserWriter  # type: ignore  # noqa: E402
 from core.client import YuqueClient  # type: ignore  # noqa: E402
 from core.mutation_errors import MutationConfirmationRequired  # type: ignore  # noqa: E402
 from core.repository_reference import RepositoryReference  # type: ignore  # noqa: E402
-from core.repository_resolver import RepositoryAuthenticationError  # type: ignore  # noqa: E402
+from core.repository_resolver import (  # type: ignore  # noqa: E402
+    RepositoryAuthenticationError,
+    RepositoryResolutionError,
+)
 
 
 class RepoService:
@@ -81,15 +84,25 @@ class RepoService:
             auth = profile_auth.auth()
             if not auth.load_cookies(page):
                 raise RepositoryAuthenticationError("profile is not authenticated")
-            writer = YuqueBrowserWriter(page)
-            namespace = writer.create_repository(
-                name=normalized_name,
-                slug=slug,
-                description=normalized_description,
-                visibility=visibility,
-            )
             client = YuqueClient(page, auth=auth)
-            repository = client.get_repository(RepositoryReference.parse(namespace))
+            try:
+                repository = client.create_repository(
+                    name=normalized_name,
+                    slug=slug,
+                    description=normalized_description,
+                    visibility=visibility,
+                )
+            except RepositoryResolutionError as exc:
+                if not _is_protocol_unsupported(exc):
+                    raise
+                writer = YuqueBrowserWriter(page)
+                namespace = writer.create_repository(
+                    name=normalized_name,
+                    slug=slug,
+                    description=normalized_description,
+                    visibility=visibility,
+                )
+                repository = client.get_repository(RepositoryReference.parse(namespace))
             append_audit(
                 self.profile,
                 {
@@ -128,3 +141,9 @@ class RepoService:
             }
         finally:
             manager.quit()
+
+
+def _is_protocol_unsupported(exc: Exception) -> bool:
+    """Only fall back to browser UI when the protocol itself is unavailable."""
+    message = str(exc).lower()
+    return "status 404" in message or "status 405" in message or "not found" in message

@@ -10,7 +10,6 @@ from .project import ensure_src_on_path
 
 ensure_src_on_path()
 
-from core.browser_writer import YuqueBrowserWriter  # type: ignore  # noqa: E402
 from core.client import YuqueClient  # type: ignore  # noqa: E402
 from core.markdown_input import MarkdownDocument, read_markdown  # type: ignore  # noqa: E402
 from core.mutation_errors import (  # type: ignore  # noqa: E402
@@ -55,7 +54,10 @@ class ImportService:
                 raise RepositoryAuthenticationError("profile is not authenticated")
             client = YuqueClient(page, auth=auth)
             repository = client.get_repository(reference)
-            url = YuqueBrowserWriter(page).import_markdown(repository, document)
+            created = client.create_markdown_document(
+                repository, document.title, document.body
+            )
+            url = client.document_url(repository, created)
             result = {
                 "status": "created",
                 "repo": asdict(repository),
@@ -114,11 +116,13 @@ class ImportService:
                 raise RepositoryAuthenticationError("profile is not authenticated")
             client = YuqueClient(page, auth=auth)
             repository = client.get_repository(reference)
-            writer = YuqueBrowserWriter(page)
             items: list[dict[str, Any]] = []
             for document in documents:
                 try:
-                    url = writer.import_markdown(repository, document)
+                    created = client.create_markdown_document(
+                        repository, document.title, document.body
+                    )
+                    url = client.document_url(repository, created)
                 except MutationTimeoutError as exc:
                     items.append(self._failed_item(document, "ambiguous", str(exc)))
                     items.extend(

@@ -92,6 +92,21 @@ class UI:
                 return None
 
     @staticmethod
+    def ask_required_text(message: str, attempts: int = 3) -> Optional[str]:
+        """Ask for non-empty text, retrying empty input before giving up."""
+        remaining = max(1, attempts)
+        while remaining > 0:
+            answer = UI.ask_text(message)
+            if answer:
+                return answer
+            remaining -= 1
+            if remaining > 0:
+                console.print(
+                    f"[yellow]⚠️ 输入不能为空，请重新输入（还剩 {remaining} 次）[/yellow]"
+                )
+        return None
+
+    @staticmethod
     def ask_confirm(message: str, default: bool = False) -> bool:
         """询问是否启用可选功能，问题文字自带默认选项说明。"""
         hint = "（默认是，直接回车即可）" if default else "（默认否，直接回车即可）"

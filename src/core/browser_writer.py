@@ -25,6 +25,8 @@ class YuqueBrowserWriter:
     """
 
     DASHBOARD_URL = "https://www.yuque.com/dashboard"
+    FIND_TIMEOUT = 5
+    CLICKABLE_TIMEOUT = 5
     _CREATE_REPOSITORY_BUTTONS = ("text:新建知识库", "text:新建空间")
     _CREATE_REPOSITORY_SUBMIT = ("text:创建知识库", "text:创建")
     _CREATE_DOCUMENT_BUTTONS = ("text:新建文档", "text:新建")
@@ -101,18 +103,105 @@ class YuqueBrowserWriter:
                 raise MutationProtocolError("Yuque page did not finish loading") from exc
 
     def _find(self, selectors: Iterable[str], label: str) -> Any:
+        tried: list[str] = []
+        first_seen: Any | None = None
+        first_selector: str | None = None
         for selector in selectors:
+            tried.append(selector)
+            candidates = self._candidates(selector)
+            for element in candidates:
+                if self._is_actionable(element):
+                    return element
+            if first_seen is None and candidates:
+                first_seen = candidates[0]
+                first_selector = selector
+        if first_seen is not None:
+            raise MutationProtocolError(
+                f"Yuque {label} control is not clickable "
+                f"(selector={first_selector!r}, state={self._describe(first_seen)}, "
+                f"url={self._current_url()})"
+            )
+        raise MutationProtocolError(
+            f"Yuque page does not expose {label} control "
+            f"(tried={', '.join(tried)}, url={self._current_url()})"
+        )
+
+    def _candidates(self, selector: str) -> list[Any]:
+        find_all = getattr(self.page, "eles", None)
+        if callable(find_all):
             try:
-                element = self.page.ele(selector, timeout=1)
+                found = find_all(selector, timeout=self.FIND_TIMEOUT)
             except Exception:  # noqa: BLE001
-                continue
-            if element is not None:
-                return element
-        raise MutationProtocolError(f"Yuque page does not expose {label} control")
+                return []
+            if found:
+                return [element for element in list(found) if not self._is_missing(element)]
+        try:
+            element = self.page.ele(selector, timeout=self.FIND_TIMEOUT)
+        except Exception:  # noqa: BLE001
+            return []
+        return [] if self._is_missing(element) else [element]
+
+    @staticmethod
+    def _is_missing(element: Any) -> bool:
+        if element is None:
+            return True
+        if type(element).__name__ == "NoneElement":
+            return True
+        try:
+            return not element
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _first_candidate(self, selector: str) -> Any | None:
+        candidates = self._candidates(selector)
+        return candidates[0] if candidates else None
+
+    def _wait_displayed(self, element: Any) -> None:
+        wait = getattr(element, "wait", None)
+        displayed = getattr(wait, "displayed", None)
+        if callable(displayed):
+            try:
+                displayed(timeout=self.CLICKABLE_TIMEOUT)
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _is_actionable(element: Any) -> bool:
+        try:
+            states = getattr(element, "states", None)
+        except Exception:  # noqa: BLE001
+            # NoneElement.__getattr__ raises ElementNotFoundError, not AttributeError.
+            return False
+        if states is None:
+            return True
+        try:
+            return bool(states.is_displayed) and bool(states.is_enabled)
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _describe(self, element: Any) -> str:
+        try:
+            states = getattr(element, "states", None)
+        except Exception:  # noqa: BLE001
+            return "missing"
+        if states is None:
+            return "unknown"
+        parts = []
+        for name in ("is_displayed", "is_enabled", "is_in_viewport", "has_rect"):
+            try:
+                parts.append(f"{name}={bool(getattr(states, name))}")
+            except Exception:  # noqa: BLE001
+                parts.append(f"{name}=unknown")
+        return ",".join(parts)
+
+    def _current_url(self) -> str:
+        return str(getattr(self.page, "url", ""))
 
     def _click(self, selectors: Iterable[str], label: str) -> None:
         element = self._find(selectors, label)
         try:
+            self._scroll_into_view(element)
+            self._wait_clickable(element)
             element.click()
         except Exception as exc:  # noqa: BLE001
             message = str(exc).lower()
@@ -120,21 +209,51 @@ class YuqueBrowserWriter:
                 raise MutationConflictError(f"Yuque rejected duplicate {label}") from exc
             if "permission" in message or "forbidden" in message:
                 raise MutationAccessError(f"Yuque denied {label}") from exc
-            raise MutationProtocolError(f"unable to activate {label} control") from exc
+            raise MutationProtocolError(
+                f"unable to activate {label} control "
+                f"(state={self._describe(element)}, url={self._current_url()})"
+            ) from exc
+
+    @staticmethod
+    def _scroll_into_view(element: Any) -> None:
+        scroll = getattr(element, "scroll", None)
+        to_see = getattr(scroll, "to_see", None)
+        if callable(to_see):
+            try:
+                to_see()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _wait_clickable(self, element: Any) -> None:
+        wait = getattr(element, "wait", None)
+        clickable = getattr(wait, "clickable", None)
+        if callable(clickable):
+            try:
+                clickable(timeout=self.CLICKABLE_TIMEOUT)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _input(self, selectors: Iterable[str], value: str, label: str) -> None:
         element = self._find(selectors, label)
         try:
+            self._scroll_into_view(element)
+            self._wait_displayed(element)
             element.input(value)
         except Exception as exc:  # noqa: BLE001
-            raise MutationProtocolError(f"unable to fill Yuque {label}") from exc
+            raise MutationProtocolError(
+                f"unable to fill Yuque {label} "
+                f"(state={self._describe(element)}, url={self._current_url()})"
+            ) from exc
 
     def _upload(self, path: Path) -> None:
         element = self._find(("css:input[type='file']", "tag:input@type=file"), "file upload")
         try:
             element.input(str(path))
         except Exception as exc:  # noqa: BLE001
-            raise MutationProtocolError("unable to select Markdown file") from exc
+            raise MutationProtocolError(
+                f"unable to select Markdown file "
+                f"(state={self._describe(element)}, url={self._current_url()})"
+            ) from exc
 
     def _namespace_from_url(self, label: str) -> str:
         parsed = self._validated_url(label)

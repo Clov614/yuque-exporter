@@ -16,6 +16,7 @@ from core.repository_reference import (  # type: ignore  # noqa: E402
     RepositoryReferenceError,
     RepositoryReferenceKind,
 )
+from core.markdown_input import normalize_markdown_path_input  # type: ignore  # noqa: E402
 
 
 FORMAT_CHOICES = ("markdown", "pdf", "word", "lake")
@@ -113,7 +114,7 @@ def validate_visibility(visibility: str) -> str:
 
 
 def validate_markdown_file(value: str) -> str:
-    path = Path(value).expanduser()
+    path = Path(normalize_markdown_path_input(value)).expanduser()
     if path.is_symlink() or not path.exists() or not path.is_file():
         raise click.BadParameter("Markdown file must be an existing regular file", param_hint="--file")
     if path.suffix.lower() != ".md":

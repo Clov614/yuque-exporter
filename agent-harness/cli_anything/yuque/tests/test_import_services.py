@@ -12,7 +12,7 @@ from cli_anything.yuque.core import importer as importer_mod  # noqa: E402
 from cli_anything.yuque.core import repo as repo_mod  # noqa: E402
 from cli_anything.yuque.core.importer import ImportService  # noqa: E402
 from cli_anything.yuque.core.repo import RepoService  # noqa: E402
-from core.models import Repository  # type: ignore  # noqa: E402
+from core.models import Document, Repository  # type: ignore  # noqa: E402
 from core.mutation_errors import (  # type: ignore  # noqa: E402
     MutationConfirmationRequired,
     MutationProtocolError,
@@ -57,12 +57,39 @@ class FakeProfileAuth:
 
 
 class FakeClient:
+    created: list[tuple[int, str]] = []
+    created_repos: list[dict[str, object]] = []
+
     def __init__(self, _page: object, auth: object = None) -> None:
         pass
 
     def get_repository(self, reference: object) -> Repository:
-        assert getattr(reference, "canonical") == "tester/existing-book"
+        canonical = getattr(reference, "canonical")
+        if canonical == "tester/new-book":
+            return Repository(id=99, name="New", slug="new-book", user_login="tester")
+        assert canonical == "tester/existing-book"
         return REPOSITORY
+
+    def create_markdown_document(
+        self, repository: Repository, title: str, body: str
+    ) -> Document:
+        assert repository.id == REPOSITORY.id
+        assert title
+        assert isinstance(body, str)
+        type(self).created.append((repository.id, title))
+        return Document(id=777, doc_id=777, title=title, slug="note", book_id=repository.id)
+
+    def document_url(self, repository: Repository, doc: Document) -> str:
+        return f"{repository.url}/{doc.slug}"
+
+    def create_repository(self, **kwargs: object) -> Repository:
+        type(self).created_repos.append(dict(kwargs))
+        return Repository(
+            id=99,
+            name=str(kwargs.get("name")),
+            slug=str(kwargs.get("slug") or "new-book"),
+            user_login="tester",
+        )
 
 
 class FakeWriter:
@@ -87,9 +114,10 @@ def reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeManager.quits = 0
     FakeWriter.imports = []
     FakeWriter.creates = []
+    FakeClient.created = []
+    FakeClient.created_repos = []
     monkeypatch.setattr(importer_mod, "ProfileAuth", FakeProfileAuth)
     monkeypatch.setattr(importer_mod, "YuqueClient", FakeClient)
-    monkeypatch.setattr(importer_mod, "YuqueBrowserWriter", FakeWriter)
     monkeypatch.setattr(importer_mod, "append_audit", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(repo_mod, "ProfileAuth", FakeProfileAuth)
     monkeypatch.setattr(repo_mod, "YuqueClient", FakeClient)
@@ -118,7 +146,9 @@ def test_import_run_reads_file_and_releases_browser(tmp_path: Path) -> None:
     assert result["status"] == "created"
     assert result["title"] == "Note"
     assert result["repo"]["id"] == 42
-    assert FakeWriter.imports == [("existing-book", "Note")]
+    assert result["url"] == f"{REPOSITORY.url}/note"
+    assert FakeClient.created == [(42, "Note")]
+    assert FakeWriter.imports == []
     assert FakeManager.starts == 1
     assert FakeManager.quits == 1
 
@@ -136,20 +166,10 @@ def test_import_batch_validates_all_files_before_starting_browser(tmp_path: Path
 
     assert FakeManager.starts == 0
     assert FakeWriter.imports == []
+    assert FakeClient.created == []
 
 
 def test_repo_create_returns_resolved_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    class CreatedClient(FakeClient):
-        def get_repository(self, reference: object) -> Repository:
-            assert getattr(reference, "canonical") == "tester/new-book"
-            return Repository(
-                id=99,
-                name="New",
-                slug="new-book",
-                user_login="tester",
-            )
-
-    monkeypatch.setattr(repo_mod, "YuqueClient", CreatedClient)
     result = RepoService("default").create(
         name="New",
         slug="new-book",
@@ -159,7 +179,7 @@ def test_repo_create_returns_resolved_repository(tmp_path: Path, monkeypatch: py
     )
 
     assert result["repo"]["id"] == 99
-    assert FakeWriter.creates == [
+    assert FakeClient.created_repos == [
         {
             "name": "New",
             "slug": "new-book",
@@ -167,20 +187,43 @@ def test_repo_create_returns_resolved_repository(tmp_path: Path, monkeypatch: py
             "visibility": "private",
         }
     ]
+    assert FakeWriter.creates == []
+    assert FakeManager.quits == 1
+
+
+def test_repo_create_falls_back_to_browser_when_protocol_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.repository_resolver import RepositoryNotFoundError  # type: ignore  # noqa: E402
+
+    class MissingProtocolClient(FakeClient):
+        def create_repository(self, **_kwargs: object) -> Repository:
+            raise RepositoryNotFoundError("Yuque repository was not found")
+
+    monkeypatch.setattr(repo_mod, "YuqueClient", MissingProtocolClient)
+    result = RepoService("default").create(
+        name="New", slug="new-book", visibility="private", confirmed=True
+    )
+
+    assert result["repo"]["id"] == 99
+    assert len(FakeWriter.creates) == 1
     assert FakeManager.quits == 1
 
 
 def test_repo_create_rejects_protocol_without_leaking_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class BrokenWriter(FakeWriter):
-        def create_repository(self, **_kwargs):
-            raise MutationProtocolError("page controls changed")
+    from core.repository_resolver import RepositoryTransportError  # type: ignore  # noqa: E402
 
-    monkeypatch.setattr(repo_mod, "YuqueBrowserWriter", BrokenWriter)
+    class BrokenProtocolClient(FakeClient):
+        def create_repository(self, **_kwargs: object) -> Repository:
+            raise RepositoryTransportError("boom")
 
-    with pytest.raises(MutationProtocolError, match="page controls"):
+    monkeypatch.setattr(repo_mod, "YuqueClient", BrokenProtocolClient)
+
+    with pytest.raises(RepositoryTransportError, match="boom"):
         RepoService("default").create(
             name="New", slug="new-book", visibility="private", confirmed=True
         )
+    assert FakeWriter.creates == []
     assert FakeManager.quits == 1

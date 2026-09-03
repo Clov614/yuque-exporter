@@ -320,3 +320,40 @@ def test_repository_table_labels_sequence_and_real_identity(
         "知识库 ID",
         "Namespace",
     ]
+
+
+def test_ask_required_text_retries_empty_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    answers = iter([None, None, "note.md"])
+    calls = []
+    monkeypatch.setattr(
+        UI, "ask_text", staticmethod(lambda message: (calls.append(message), next(answers))[1])
+    )
+
+    assert UI.ask_required_text("Path") == "note.md"
+    assert len(calls) == 3
+
+
+def test_ask_required_text_gives_up_after_three_empties(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        UI, "ask_text", staticmethod(lambda message: calls.append(message) or None)
+    )
+
+    assert UI.ask_required_text("Path") is None
+    assert len(calls) == 3
+
+
+def test_ask_required_text_attempts_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(
+        UI, "ask_text", staticmethod(lambda message: calls.append(message) or None)
+    )
+
+    assert UI.ask_required_text("Path", attempts=1) is None
+    assert len(calls) == 1
