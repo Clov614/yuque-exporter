@@ -108,11 +108,16 @@ class UI:
 
     @staticmethod
     def ask_confirm(message: str, default: bool = False) -> bool:
-        """询问是否启用可选功能，问题文字自带默认选项说明。"""
+        """询问是否启用可选功能，问题文字自带默认选项说明。
+
+        必须 auto_enter=False：questionary 默认 True 会在用户敲 y/n 时
+        立刻提交，多补的回车残留在输入队列里，下一次 select 会被瞬间
+        选中首项（主菜单乱跳到导出的根因）。
+        """
         hint = "（默认是，直接回车即可）" if default else "（默认否，直接回车即可）"
         prompt = f"{message}{hint}"
         try:
-            answer = questionary.confirm(prompt, default=default).ask()
+            answer = questionary.confirm(prompt, default=default, auto_enter=False).ask()
             return default if answer is None else bool(answer)
         except Exception:
             suffix = "Y/n" if default else "y/N"
@@ -192,6 +197,26 @@ class UI:
                 visibility,
             )
             
+        console.print(table)
+
+    @staticmethod
+    def show_favorite_docs(docs: List[Any]):
+        table = Table(title="⭐ 收藏文档列表")
+        table.add_column("序号", style="dim", width=6)
+        table.add_column("文档名称", style="cyan")
+        table.add_column("归属", style="cyan")
+        table.add_column("收藏时间", style="dim")
+
+        for idx, doc in enumerate(docs, 1):
+            book_display = getattr(doc, "book_display", "") or ""
+            favorite_time = getattr(doc, "favorite_time", "") or ""
+            table.add_row(
+                str(idx),
+                getattr(doc, "title", ""),
+                book_display,
+                favorite_time or "-",
+            )
+
         console.print(table)
         
     @staticmethod

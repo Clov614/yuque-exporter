@@ -24,6 +24,9 @@ class FakeClient:
         self.list_calls = 0
         self.favorite_calls = 0
 
+    def _current_user_login(self) -> str | None:
+        return "owner"
+
     def get_repositories(self) -> list[Repository]:
         self.list_calls += 1
         return list(self.repositories)

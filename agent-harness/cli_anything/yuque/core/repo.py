@@ -85,16 +85,15 @@ class RepoService:
             if not auth.load_cookies(page):
                 raise RepositoryAuthenticationError("profile is not authenticated")
             client = YuqueClient(page, auth=auth)
-            try:
-                repository = client.create_repository(
-                    name=normalized_name,
-                    slug=slug,
-                    description=normalized_description,
-                    visibility=visibility,
+            if visibility == "team":
+                # The books protocol has no team flag (see YuqueClient
+                # .create_repository): route team requests straight to the
+                # visible flow and say so, instead of silently degrading
+                # to private or hiding behind a protocol-error fallback.
+                print(
+                    "⚠️ team visibility has no protocol support; "
+                    "creating through the visible browser flow"
                 )
-            except RepositoryResolutionError as exc:
-                if not _is_protocol_unsupported(exc):
-                    raise
                 writer = YuqueBrowserWriter(page)
                 namespace = writer.create_repository(
                     name=normalized_name,
@@ -103,6 +102,25 @@ class RepoService:
                     visibility=visibility,
                 )
                 repository = client.get_repository(RepositoryReference.parse(namespace))
+            else:
+                try:
+                    repository = client.create_repository(
+                        name=normalized_name,
+                        slug=slug,
+                        description=normalized_description,
+                        visibility=visibility,
+                    )
+                except RepositoryResolutionError as exc:
+                    if not _is_protocol_unsupported(exc):
+                        raise
+                    writer = YuqueBrowserWriter(page)
+                    namespace = writer.create_repository(
+                        name=normalized_name,
+                        slug=slug,
+                        description=normalized_description,
+                        visibility=visibility,
+                    )
+                    repository = client.get_repository(RepositoryReference.parse(namespace))
             append_audit(
                 self.profile,
                 {
@@ -110,6 +128,8 @@ class RepoService:
                     "repository_id": repository.id,
                     "namespace": f"{repository.user_login}/{repository.slug}",
                     "status": "created",
+                    "via": "browser" if visibility == "team" else "protocol",
+                    "visibility": visibility,
                 },
             )
             return {"status": "created", "repo": asdict(repository)}

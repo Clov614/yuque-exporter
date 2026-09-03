@@ -16,10 +16,11 @@ sys.path.append(str(Path(__file__).parent))
 from core.browser_writer import YuqueBrowserWriter
 from core.client import YuqueClient, ExportType
 from core.auth import YuqueAuth, LoginStatus
+from core.favorite_document import FavoriteDocument
 from core.incremental import finalize as finalize_incremental
 from core.incremental import plan_incremental, record_exported, stamp_metadata
 from core.markdown_input import read_markdown
-from core.models import Repository
+from core.models import Document, Repository
 from core.mutation_errors import MutationError
 from core.exporter import DocumentExporter
 from core.repository_reference import RepositoryReferenceError
@@ -95,7 +96,10 @@ class Application:
                     "🚪 退出",
                 ]
             )
-            
+            if choice is None:
+                # Ctrl+C / 无控制台回落：回到菜单等待下一次选择，不乱跳。
+                continue
+
             if choice == "📚 导出知识库":
                 self.export_flow()
             elif choice == "📥 导入 Markdown":
@@ -112,11 +116,41 @@ class Application:
 
     def export_flow(self):
         """导出流程"""
-        selected_repos = self._select_repositories()
+        selection = self._select_repositories()
+        if isinstance(selection, tuple) and selection[0] == "favorite_docs":
+            favorite_docs = selection[1]
+            if not favorite_docs:
+                return
+            options = self._ask_export_options()
+            if options is None:
+                return
+            export_type, download_images, incremental = options
+            self.export_favorite_documents(
+                favorite_docs,
+                export_type,
+                download_images=download_images,
+                incremental=incremental,
+            )
+            return
+        selected_repos = selection
         if not selected_repos:
             return
+        options = self._ask_export_options()
+        if options is None:
+            return
+        export_type, download_images, incremental = options
 
-        # Select Format
+        # Process each repo
+        for repo in selected_repos:
+            self.process_repo_export(
+                repo,
+                export_type,
+                download_images=download_images,
+                incremental=incremental,
+            )
+
+    def _ask_export_options(self) -> tuple[ExportType, bool, bool] | None:
+        """选择导出格式与 Markdown 专属选项，取消时返回 None。"""
         format_map = {
             "Markdown (推荐)": ExportType.MARKDOWN,
             "PDF": ExportType.PDF,
@@ -125,7 +159,7 @@ class Application:
         }
         fmt_choice = UI.ask_choice("选择导出格式:", list(format_map.keys()))
         if fmt_choice not in format_map:
-            return
+            return None
         export_type = format_map[fmt_choice]
         download_images = False
         incremental = False
@@ -136,15 +170,7 @@ class Application:
             incremental = UI.ask_confirm(
                 "是否只导出有更新的文档（增量导出）？", default=True
             )
-
-        # Process each repo
-        for repo in selected_repos:
-            self.process_repo_export(
-                repo,
-                export_type,
-                download_images=download_images,
-                incremental=incremental,
-            )
+        return export_type, download_images, incremental
 
     def create_repository_flow(self) -> None:
         """Create one private-by-default repository, protocol first."""
@@ -241,13 +267,14 @@ class Application:
             raise RuntimeError("Yuque client is not initialized")
         return self.client
 
-    def _select_repositories(self) -> list[Repository]:
-        """Choose repositories from the common list or a direct reference."""
+    def _select_repositories(self) -> list[Repository] | tuple[str, list[FavoriteDocument]]:
+        """Choose repositories from the common list, favorites, docs, or a direct reference."""
         source = UI.ask_choice(
             "请选择知识库来源:",
             [
                 "从常用知识库列表选择",
                 "从收藏知识库列表选择",
+                "从收藏文档列表选择",
                 "通过 ID / namespace / URL 直接指定",
             ],
         )
@@ -257,6 +284,8 @@ class Application:
             return self._select_from_common_repositories()
         if source == "从收藏知识库列表选择":
             return self._select_from_favorite_repositories()
+        if source == "从收藏文档列表选择":
+            return ("favorite_docs", self._select_from_favorite_documents())
         return []
 
     def _select_from_common_repositories(self) -> list[Repository]:
@@ -313,6 +342,34 @@ class Application:
         ]
         return UI.ask_checkbox(
             "请选择要导出的收藏知识库 (按空格选择，回车确认):",
+            choices,
+        )
+
+    def _select_from_favorite_documents(self) -> list[FavoriteDocument]:
+        client = self._require_client()
+        try:
+            with UI.create_progress() as progress:
+                task = progress.add_task("获取收藏文档列表...", total=None)
+                documents = client.get_favorite_documents()
+                progress.update(task, completed=100, visible=False)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取收藏文档列表失败: {exc}")
+            return []
+
+        if not documents:
+            UI.warning("未识别到收藏文档；可返回主菜单改用知识库来源重新导出")
+            return []
+
+        UI.show_favorite_docs(documents)
+        choices = [
+            {
+                "name": f"[{index}] {document.title}（{document.book_display}）",
+                "value": document,
+            }
+            for index, document in enumerate(documents, 1)
+        ]
+        return UI.ask_checkbox(
+            "请选择要导出的收藏文档 (按空格选择，回车确认):",
             choices,
         )
 
@@ -434,6 +491,17 @@ class Application:
     ) -> None:
         """处理单个知识库导出"""
         client = self._require_client()
+        current_login = client._current_user_login()
+        if (
+            current_login
+            and repo.user_login
+            and repo.user_login != current_login
+        ):
+            UI.warning(
+                f"[{repo.name}] 为他人知识库 ({repo.user_login})，"
+                "官方导出接口可能无权限，失败属预期；"
+                "可改导自有库，或等页面解析导出支持。"
+            )
         UI.info(f"正在分析知识库: {repo.name}")
 
         # Get Catalog
@@ -530,14 +598,35 @@ class Application:
             UI.warning("未包含任何有效文档")
             return
 
+        path_map = self._build_path_map(nodes)
+        self._export_target_docs(
+            repo,
+            target_docs,
+            path_map,
+            export_type,
+            download_images=download_images,
+            incremental=incremental,
+            full_catalog_nodes=nodes,
+        )
+
+    def _export_target_docs(
+        self,
+        repo: Repository,
+        target_docs: list[Document],
+        path_map: dict[str, str],
+        export_type: ExportType,
+        download_images: bool = False,
+        incremental: bool = False,
+        full_catalog_nodes: list[Document] | None = None,
+    ) -> None:
+        """导出已确定的文档集合，复用增量规划与落盘循环。"""
+        client = self._require_client()
         # 增量模式仅支持 Markdown（与 CLI --incremental 保持一致）
         if incremental and export_type != ExportType.MARKDOWN:
             UI.warning("增量导出仅支持 Markdown 格式，已切换为全量导出")
             incremental = False
 
         # Begin Export
-        # 预计算路径映射
-        path_map = self._build_path_map(nodes)
 
         ext = ".md" if export_type == ExportType.MARKDOWN else f".{export_type.value}"
         incremental_plan = plan_incremental(
@@ -563,8 +652,11 @@ class Application:
         success_count = 0
         image_downloaded_count = 0
         image_failed_count = 0
+        failed_docs: list[str] = []
         with UI.create_progress() as progress:
-            main_task = progress.add_task(f"导出 [{repo.name}]", total=len(pending_docs))
+            main_task = progress.add_task(
+                f"导出 [{repo.name}]", total=len(pending_docs)
+            )
 
             # 创建下载任务 (隐藏，用于显示单个文件进度)
             download_task = progress.add_task("等待下载...", total=None, visible=False)
@@ -584,6 +676,12 @@ class Application:
                 relative_dir = "/".join(path_parts[:-1]) if len(path_parts) > 1 else ""
 
                 url = client.export_document(doc, export_type)
+
+                if not url:
+                    failed_docs.append(f"{doc.title} (id={doc.id})")
+                    UI.warning(f"导出失败: {doc.title} (id={doc.id})，已跳过")
+                    progress.advance(main_task)
+                    continue
 
                 save_path = self.exporter.get_save_path(doc, repo.name, extension=ext, relative_path=relative_dir)
 
@@ -623,14 +721,24 @@ class Application:
                             stamp_metadata(incremental_plan, self.exporter, save_path, doc)
                         success_count += 1
                         record_exported(incremental_plan, doc)
+                    else:
+                        failed_docs.append(f"{doc.title} (id={doc.id})")
+                        UI.warning(f"下载失败: {doc.title} (id={doc.id})，已跳过")
 
                     # 隐藏下载任务
                     progress.update(download_task, visible=False)
 
                 progress.advance(main_task)
 
-        finalized = finalize_incremental(incremental_plan, nodes)
+        finalized = finalize_incremental(
+            incremental_plan, full_catalog_nodes if full_catalog_nodes is not None else target_docs
+        )
         UI.success(f"[{repo.name}] 导出完成: {success_count}/{len(pending_docs)}")
+        if failed_docs:
+            UI.warning(
+                f"失败 {len(failed_docs)} 篇: " + "、".join(failed_docs[:10])
+                + ("……" if len(failed_docs) > 10 else "")
+            )
         if incremental:
             UI.info(f"未修改跳过: {len(skipped_uuids)} 篇")
             if finalized["stale"]:
@@ -642,6 +750,93 @@ class Application:
             UI.info(
                 f"图片本地化: 成功 {image_downloaded_count} 张，失败 {image_failed_count} 张"
             )
+
+    def export_favorite_documents(
+        self,
+        favorite_docs: list[FavoriteDocument],
+        export_type: ExportType,
+        download_images: bool = False,
+        incremental: bool = False,
+    ) -> None:
+        """按归属知识库分组导出用户选中的收藏文档。"""
+        client = self._require_client()
+        groups: dict[int, list[FavoriteDocument]] = {}
+        no_book: list[FavoriteDocument] = []
+        for favorite in favorite_docs:
+            if isinstance(favorite.book_id, int) and favorite.book_id > 0:
+                groups.setdefault(favorite.book_id, []).append(favorite)
+            else:
+                no_book.append(favorite)
+        for book_id in sorted(groups):
+            self._export_favorite_group(
+                groups[book_id],
+                export_type,
+                download_images=download_images,
+                incremental=incremental,
+            )
+        if no_book:
+            UI.warning(
+                f"跳过 {len(no_book)} 篇无归属知识库的收藏: "
+                + "、".join(doc.title for doc in no_book[:10])
+                + ("……" if len(no_book) > 10 else "")
+            )
+
+    def _export_favorite_group(
+        self,
+        favorites: list[FavoriteDocument],
+        export_type: ExportType,
+        download_images: bool = False,
+        incremental: bool = False,
+    ) -> None:
+        client = self._require_client()
+        book_id = favorites[0].book_id
+        try:
+            repo = client.get_repository(book_id)
+        except RepositoryResolutionError as exc:
+            UI.error(f"获取收藏归属知识库失败 (book_id={book_id}): {exc}")
+            return
+        try:
+            nodes = client.get_catalog_nodes(repo)
+        except RepositoryResolutionError as exc:
+            UI.warning(
+                f"获取 [{repo.name}] 的目录失败 ({exc})，"
+                "改按收藏单篇直接导出（不保留原目录层级）"
+            )
+            nodes = []
+        node_by_id = {
+            node.id: node
+            for node in nodes
+            if node.type == "DOC" and isinstance(node.id, int) and node.id > 0
+        }
+        path_map = self._build_path_map(nodes)
+        target_docs: list[Document] = []
+        missing: list[str] = []
+        for favorite in favorites:
+            node = node_by_id.get(favorite.doc_id)
+            if node is not None:
+                target_docs.append(node)
+                continue
+            fallback = favorite.to_document()
+            target_docs.append(fallback)
+            missing.append(favorite.title)
+        if missing:
+            UI.info(
+                f"[{repo.name}] {len(missing)} 篇收藏在目录中未命中，"
+                "已按单篇导出到知识库根目录: " + "、".join(missing[:10])
+                + ("……" if len(missing) > 10 else "")
+            )
+        if not target_docs:
+            UI.warning(f"[{repo.name}] 本组无可导出文档")
+            return
+        self._export_target_docs(
+            repo,
+            target_docs,
+            path_map,
+            export_type,
+            download_images=download_images,
+            incremental=incremental,
+            full_catalog_nodes=nodes,
+        )
 
     def _build_path_map(self, nodes):
         """构建 uuid -> full_path string 映射"""

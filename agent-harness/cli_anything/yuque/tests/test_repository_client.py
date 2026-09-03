@@ -560,3 +560,33 @@ def test_create_repository_uses_books_protocol() -> None:
     assert call["url"] == "https://www.yuque.com/api/books"
     assert call["json"]["name"] == "New"
     assert call["json"]["public"] == 0
+
+
+def test_create_repository_rejects_team_without_protocol_call() -> None:
+    client, session = client_with(
+        FakeResponse(200, {"data": {"id": 99, "name": "New", "slug": "new",
+                                    "user": {"login": "tester"}}})
+    )
+
+    with pytest.raises(RepositoryResponseError, match="team visibility"):
+        client.create_repository(name="New", slug="new", description="d",
+                                 visibility="team")
+
+    assert session.calls == []
+
+
+def test_export_document_returns_none_and_logs_context_on_404(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from core.models import Document  # type: ignore  # noqa: E402
+
+    client, _session = client_with(FakeResponse(404, {}))
+    doc = Document(id=777, title="Stranger Doc", slug="stranger-doc", book_id=20314920)
+
+    assert client.export_document(doc, ExportType.MARKDOWN) is None
+
+    out = capsys.readouterr().out
+    assert "777" in out
+    assert "Stranger Doc" in out
+    assert "/api/docs/777/export" in out
+    assert "404" in out
