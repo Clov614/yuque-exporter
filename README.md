@@ -154,6 +154,15 @@ cli-anything-yuque repo tree --repo https://www.yuque.com/owner/book-slug --prof
 - `repo list --source favorites`：只列出收藏页中明确标记为 Book/知识库的卡片；收藏文档的所属知识库不会被自动加入
 - `repo tree`：查看指定知识库目录结构；`--repo-id` 与 `--repo` 必须二选一
 - `--repo`：接受 `owner/book-slug` 或完整的 Yuque 知识库 URL
+- `repo create`：新建知识库，默认私有；`--name` 必填，`--slug`/`--description` 可选，
+  `--visibility` 支持 `private|public|team`（默认 `private`）
+
+```bash
+cli-anything-yuque repo create --name 新知识库 --slug new-book --visibility private --dry-run --json
+cli-anything-yuque repo create --name 新知识库 --yes --json
+```
+
+- 写操作必须显式确认：`--yes` 或 `--dry-run` 二选一，不加会报参数错误；`--dry-run` 只校验不写远端
 
 ### 7) export 命令组
 
@@ -204,7 +213,27 @@ cli-anything-yuque export batch \
 - `--incremental` 默认关闭且仅可与 `--format markdown` 同时使用；JSON 结果会返回 `skipped` 计数、
   `status` 为 `skipped` 的条目、`state_file` 路径与 `stale_files` 汇总
 
-### 8) JSON 输出与退出码约定
+### 8) import 命令组
+
+#### 单文件导入
+
+```bash
+cli-anything-yuque import run --repo owner/book-slug --file ./note.md --yes --json
+cli-anything-yuque import run --repo-id <repo_id> --file ./note.md --title 自定义标题 --dry-run --json
+```
+
+#### 批量导入
+
+```bash
+cli-anything-yuque import batch --repo owner/book-slug --file ./a.md --file ./b.md --yes --json
+```
+
+- `--repo-id` 与 `--repo` 必须二选一；`--file` 必须为已存在的 `.md` 文件（粘贴带引号的 Windows 路径会自动去引号）
+- `--title` 可选，不填则用文档首个 H1 或文件名；`batch` 不支持单文件改标题
+- 写操作必须显式确认：`--yes` 或 `--dry-run` 二选一；`--dry-run` 只校验不写远端
+- 导入通过建文档协议写入，并挂载到知识库目录末尾（侧边栏可见）；本地图片与附件不会单独上传
+
+### 9) JSON 输出与退出码约定
 
 成功 envelope：
 

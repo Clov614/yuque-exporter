@@ -22,7 +22,8 @@
 ### 1.3 非目标
 - 不绕过认证机制。
 - 不提供破坏性操作（删除线上文档/覆盖远端内容）。
-- 不修改用户知识库内容，仅做读取与导出。
+- 写操作（新建知识库、导入文档）必须显式确认（`--yes` 或 `--dry-run`），默认只校验不写远端；
+  仅做新增写入，不修改或删除用户既有内容。
 
 ---
 
@@ -91,6 +92,8 @@ agent-harness/
 2. `repo`
    - `repo list [--source common|favorites]`（默认 common；favorites 仅识别明确的知识库收藏卡片）
    - `repo tree --repo-id <id>` 或 `repo tree --repo <owner/slug|Yuque URL>`
+   - `repo create --name <name> [--slug <slug>] [--description <text>] [--visibility private|public|team] --yes|--dry-run`
+    （默认私有；写操作必须显式确认，`--dry-run` 只校验不写远端）
 
 3. `export`
    - `export run --repo-id <id> ...` 或 `export run --repo <owner/slug|Yuque URL> ...`
@@ -101,7 +104,14 @@ agent-harness/
      结果含 `skipped` 计数、`status=skipped` 条目与 `stale_files` 汇总（语雀已删文档的本地文件仅报告、不删除）；
      可与 `--node` 子集组合使用
 
-4. `session`
+4. `import`
+   - `import run --repo-id <id>|--repo <owner/slug|Yuque URL> --file <note.md> [--title <title>] --yes|--dry-run`
+   - `import batch --repo-id <id>|--repo <owner/slug|Yuque URL> --file <a.md> --file <b.md> --yes|--dry-run`
+   - `--file` 必须为已存在的 `.md` 文件（粘贴带引号的 Windows 路径会自动去引号）；
+     导入经建文档协议写入并挂载到目录末尾，本地图片与附件不单独上传；
+     写操作必须显式确认，`--dry-run` 只校验不写远端
+
+5. `session`
    - `session init`
    - `session show`
    - `session doctor`（依赖检查、浏览器可用性检查）

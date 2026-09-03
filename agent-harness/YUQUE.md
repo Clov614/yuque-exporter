@@ -11,10 +11,14 @@
 ## Command groups
 
 - `auth login|status|logout`
-- `repo list|tree`
+- `repo list|tree|create`
+- `import run|batch`
 - `export run|batch`
 - `session init|show|doctor`
 - `project info|paths`
+
+Write commands (`repo create`, `import run|batch`) require explicit confirmation
+(`--yes` or `--dry-run`); `--dry-run` validates without changing Yuque.
 
 ## Output contract
 
