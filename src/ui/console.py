@@ -81,11 +81,14 @@ class UI:
             answer = questionary.text(message).ask()
             normalized = answer.strip() if isinstance(answer, str) else ""
             return normalized or None
-        except (EOFError, KeyboardInterrupt, OSError):
+        except Exception:
+            # Fallback for non-interactive consoles (e.g. PyCharm Run):
+            # questionary/prompt_toolkit may raise NoConsoleScreenBufferError
+            # or other generic Exceptions when no real Win32 console exists.
             try:
                 answer = input(f"{message}: ").strip()
                 return answer or None
-            except (KeyboardInterrupt, EOFError):
+            except (KeyboardInterrupt, EOFError, OSError):
                 return None
 
     @staticmethod

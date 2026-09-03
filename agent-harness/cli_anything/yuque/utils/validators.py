@@ -20,6 +20,7 @@ from core.repository_reference import (  # type: ignore  # noqa: E402
 
 FORMAT_CHOICES = ("markdown", "pdf", "word", "lake")
 PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+REPOSITORY_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
 
 
 def validate_profile(profile: str) -> str:
@@ -84,6 +85,40 @@ def validate_node_values(values: Iterable[str]) -> List[str]:
     if bad:
         raise click.BadParameter("node values look invalid")
     return result
+
+
+def validate_repository_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized or len(normalized) > 200:
+        raise click.BadParameter("repository name must be 1-200 characters", param_hint="--name")
+    return normalized
+
+
+def validate_repository_slug(slug: str | None) -> str | None:
+    if slug is None:
+        return None
+    normalized = slug.strip()
+    if not REPOSITORY_SLUG_RE.fullmatch(normalized):
+        raise click.BadParameter(
+            "slug must contain lowercase letters, digits, and hyphens",
+            param_hint="--slug",
+        )
+    return normalized
+
+
+def validate_visibility(visibility: str) -> str:
+    if visibility not in {"private", "public", "team"}:
+        raise click.BadParameter("visibility must be private, public, or team")
+    return visibility
+
+
+def validate_markdown_file(value: str) -> str:
+    path = Path(value).expanduser()
+    if path.is_symlink() or not path.exists() or not path.is_file():
+        raise click.BadParameter("Markdown file must be an existing regular file", param_hint="--file")
+    if path.suffix.lower() != ".md":
+        raise click.BadParameter("Markdown file must use the .md extension", param_hint="--file")
+    return str(path.resolve())
 
 
 def normalize_output_dir(output_dir: str | None) -> str | None:

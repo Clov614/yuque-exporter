@@ -160,6 +160,108 @@ def test_ui_ask_text_falls_back_to_input(monkeypatch: pytest.MonkeyPatch) -> Non
     assert UI.ask_text("Repository") == "owner/repo"
 
 
+def test_ui_ask_text_falls_back_on_generic_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Simulate NoConsoleScreenBufferError from prompt_toolkit on Windows."""
+
+    class BrokenPrompt:
+        @staticmethod
+        def ask() -> str:
+            raise RuntimeError("No Windows console found. Are you running cmd.exe?")
+
+    monkeypatch.setattr(console_mod.questionary, "text", lambda *_a, **_k: BrokenPrompt())
+    monkeypatch.setattr(builtins, "input", lambda _prompt: "  note.md  ")
+
+    assert UI.ask_text("Markdown path") == "note.md"
+
+
+def test_ui_ask_text_returns_none_when_fallback_input_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenPrompt:
+        @staticmethod
+        def ask() -> str:
+            raise RuntimeError("No Windows console found. Are you running cmd.exe?")
+
+    monkeypatch.setattr(console_mod.questionary, "text", lambda *_a, **_k: BrokenPrompt())
+
+    def _raise(_prompt: str) -> str:
+        raise OSError("no input")
+
+    monkeypatch.setattr(builtins, "input", _raise)
+
+    assert UI.ask_text("Markdown path") is None
+
+
+def test_single_common_selection_uses_import_wording_and_single_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = Repository(
+        id=7,
+        name="Import Target",
+        slug="import-target",
+        user_login="owner",
+    )
+    application = application_with(FakeClient([repository]))
+    monkeypatch.setattr(
+        UI,
+        "ask_choice",
+        staticmethod(
+            lambda message, choices: (
+                "从常用知识库列表选择"
+                if "来源" in message
+                else choices[0]
+            )
+        ),
+    )
+    monkeypatch.setattr(UI, "create_progress", staticmethod(lambda: FakeProgress()))
+    monkeypatch.setattr(UI, "show_repos", staticmethod(lambda _repos: None))
+    captured: list[str] = []
+    original_ask_choice = UI.ask_choice
+
+    def _capture(message: str, choices: list[str]) -> str | None:
+        captured.append(message)
+        return original_ask_choice(message, choices)
+
+    monkeypatch.setattr(UI, "ask_choice", staticmethod(_capture))
+
+    selected = application._select_single_repository()
+
+    assert selected is not None and selected.id == 7
+    assert any("导入" in message for message in captured)
+    assert all("导出" not in message for message in captured)
+
+
+def test_single_direct_selection_returns_one_repository_without_followup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeClient()
+    application = application_with(client)
+    monkeypatch.setattr(
+        UI,
+        "ask_choice",
+        staticmethod(lambda *_args, **_kwargs: "通过 ID / namespace / URL 直接指定"),
+    )
+    monkeypatch.setattr(
+        UI,
+        "ask_text",
+        staticmethod(lambda *_args, **_kwargs: "owner/import-target"),
+    )
+    confirm_calls: list[str] = []
+    monkeypatch.setattr(
+        UI,
+        "ask_confirm",
+        staticmethod(lambda message, **_kwargs: confirm_calls.append(message) or False),
+    )
+
+    selected = application._select_single_repository()
+
+    assert selected is not None and selected.id == 42
+    assert client.direct_calls == ["owner/import-target"]
+    assert confirm_calls == []
+
+
 def test_common_list_failure_returns_to_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
