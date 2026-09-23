@@ -93,15 +93,10 @@ class FakeClient:
 
 
 class FakeWriter:
-    imports: list[tuple[str, str]] = []
     creates: list[dict[str, str | None]] = []
 
     def __init__(self, _page: object) -> None:
         pass
-
-    def import_markdown(self, repository: Repository, document) -> str:
-        self.imports.append((repository.slug, document.title))
-        return f"{repository.url}/{document.title.lower()}"
 
     def create_repository(self, **kwargs: str | None) -> str:
         self.creates.append(kwargs)
@@ -112,7 +107,6 @@ class FakeWriter:
 def reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeManager.starts = 0
     FakeManager.quits = 0
-    FakeWriter.imports = []
     FakeWriter.creates = []
     FakeClient.created = []
     FakeClient.created_repos = []
@@ -148,7 +142,6 @@ def test_import_run_reads_file_and_releases_browser(tmp_path: Path) -> None:
     assert result["repo"]["id"] == 42
     assert result["url"] == f"{REPOSITORY.url}/note"
     assert FakeClient.created == [(42, "Note")]
-    assert FakeWriter.imports == []
     assert FakeManager.starts == 1
     assert FakeManager.quits == 1
 
@@ -165,7 +158,6 @@ def test_import_batch_validates_all_files_before_starting_browser(tmp_path: Path
         )
 
     assert FakeManager.starts == 0
-    assert FakeWriter.imports == []
     assert FakeClient.created == []
 
 
@@ -226,4 +218,32 @@ def test_repo_create_rejects_protocol_without_leaking_details(
             name="New", slug="new-book", visibility="private", confirmed=True
         )
     assert FakeWriter.creates == []
+    assert FakeManager.quits == 1
+
+
+def test_repo_create_routes_team_straight_to_browser(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Team has no books-protocol flag: it must use the visible flow loudly."""
+    audit_events: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        repo_mod, "append_audit", lambda *_a, **_k: audit_events.append(_k or _a[1])
+    )
+
+    result = RepoService("default").create(
+        name="Team Book", slug="team-book", visibility="team", confirmed=True
+    )
+
+    assert result["repo"]["id"] == 99
+    assert FakeClient.created_repos == []
+    assert FakeWriter.creates == [
+        {
+            "name": "Team Book",
+            "slug": "team-book",
+            "description": "",
+            "visibility": "team",
+        }
+    ]
+    assert "team visibility has no protocol support" in capsys.readouterr().out
+    assert audit_events and audit_events[0]["via"] == "browser"
     assert FakeManager.quits == 1

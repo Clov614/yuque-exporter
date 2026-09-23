@@ -30,6 +30,8 @@ from .repository_resolver import (
     RepositoryTransportError,
 )
 from .download_support import ExportDownloadMixin
+from .favorite_document import FavoriteDocument
+from .favorite_document_provider import FavoriteDocumentProvider
 from .favorite_repository_provider import FavoriteRepositoryProvider
 
 class ExportType(Enum):
@@ -228,6 +230,11 @@ class YuqueClient(ExportDownloadMixin):
         )
         return provider.list_repositories()
 
+    def get_favorite_documents(self) -> List[FavoriteDocument]:
+        """获取收藏页中标记为 Doc 的单篇文档收藏。"""
+        provider = FavoriteDocumentProvider(self._request_favorite_resource)
+        return provider.list_documents()
+
     def get_repositories(self) -> List[Repository]:
         """获取常用知识库列表。"""
         print("📚 获取知识库列表...")
@@ -381,15 +388,23 @@ class YuqueClient(ExportDownloadMixin):
 
         Verified live (``POST /api/books`` with ``name/slug/description/
         public``) using the user's own browser session. ``visibility`` accepts
-        ``private`` (default) or ``public``; ``team`` is sent as private since
-        the books endpoint has no team flag. Raises RepositoryResolutionError
-        subclasses on failure so callers stay fail-closed.
+        ``private`` (default) or ``public``; ``team`` raises
+        ``RepositoryResponseError`` because the books endpoint exposes no
+        team flag — callers must route team requests through the visible
+        browser flow instead of silently degrading to private.
+        Raises RepositoryResolutionError subclasses on failure so callers
+        stay fail-closed.
         """
         normalized_name = name.strip()
         if not normalized_name:
             raise RepositoryResponseError("repository name cannot be empty")
         if len(normalized_name) > 200:
             raise RepositoryResponseError("repository name is too long")
+        if visibility == "team":
+            raise RepositoryResponseError(
+                "team visibility has no books-protocol flag; "
+                "create it through the browser flow"
+            )
         payload: dict[str, object] = {
             "name": normalized_name,
             "description": description.strip(),
@@ -446,6 +461,7 @@ class YuqueClient(ExportDownloadMixin):
     ) -> Optional[str]:
         """导出文档，返回下载链接"""
         url = self.API_DOC_EXPORT.format(doc_id=doc.id)
+        doc_label = f"{doc.title} (id={doc.id}, slug={doc.slug}, book_id={doc.book_id})"
         
         options_str = ""
         if export_type == ExportType.MARKDOWN:
@@ -462,15 +478,16 @@ class YuqueClient(ExportDownloadMixin):
         try:
             # 1. 发起导出请求
             response = self._request_api("POST", url, json=payload)
-            
+
             # 特殊处理：未发布文档
             if response and response.get('status') == 400:
                 msg = response.get('message', '')
                 if "请发布后再导出" in msg:
-                    print(f"⚠️ 文档未发布: {doc.title}，将创建空文件")
+                    print(f"⚠️ 文档未发布: {doc_label}，将创建空文件")
                     return "EMPTY_DOC"
-            
+
             if not response:
+                print(f"⚠️ 发起导出无响应: {doc_label} url={url}")
                 return None
             
             data = response.get('data', {})
@@ -487,7 +504,7 @@ class YuqueClient(ExportDownloadMixin):
                 retry_count += 1
             
             if state != 'success':
-                print(f"❌ 导出超时或失败: state={state}")
+                print(f"❌ 导出超时或失败: {doc_label} state={state} retries={retry_count}")
                 return None
                 
             download_url = data.get('url', '')
@@ -497,7 +514,7 @@ class YuqueClient(ExportDownloadMixin):
             return download_url
             
         except Exception as e:
-            print(f"❌ 导出文档异常: {e}")
+            print(f"❌ 导出文档异常: {doc_label} url={url} err={e}")
             return None
 
     def download_external_image(
@@ -938,12 +955,22 @@ class YuqueClient(ExportDownloadMixin):
                 try:
                     return response.json()
                 except (TypeError, ValueError, requests.JSONDecodeError):
-                    print("API request failed with status 400")
+                    print(f"API request failed: {method} {url} status=400 (no json body)")
                     return None
             else:
-                print(f"API request failed with status {response.status_code}")
+                body = (response.text or "")[:200]
+                if response.status_code in (401, 403):
+                    print(
+                        f"API request denied: {method} {url} "
+                        f"status={response.status_code} body={body}"
+                    )
+                else:
+                    print(
+                        f"API request failed: {method} {url} "
+                        f"status={response.status_code} body={body}"
+                    )
                 return None
 
-        except Exception:
-            print("API request failed")
+        except Exception as exc:
+            print(f"API request failed: {method} {url} err={exc}")
             return None

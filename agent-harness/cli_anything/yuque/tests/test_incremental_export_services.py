@@ -219,6 +219,9 @@ def test_failed_export_is_not_recorded(tmp_path: Path) -> None:
 
     statuses = {item["doc"]["uuid"]: item["status"] for item in result["items"]}
     assert statuses["doc2"] == "failed"
+    assert result["failed"] == 1
+    assert [x["doc"]["uuid"] for x in result["failed_items"]] == ["doc2"]
+    assert result["failed_items"][0]["reason"] == "export task returned no download url"
 
     FakeYuqueClient.export_calls = []
     FakeYuqueClient.export_results = {}

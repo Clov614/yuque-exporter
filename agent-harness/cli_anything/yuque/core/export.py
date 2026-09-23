@@ -134,7 +134,14 @@ class ExportService:
                     continue
 
                 if not url:
-                    exported.append({"doc": asdict(doc), "status": "failed", "path": str(save_path)})
+                    exported.append(
+                        {
+                            "doc": asdict(doc),
+                            "status": "failed",
+                            "path": str(save_path),
+                            "reason": "export task returned no download url",
+                        }
+                    )
                     continue
 
                 ok = client.download_file(url, str(save_path))
@@ -143,6 +150,8 @@ class ExportService:
                     "status": "ok" if ok else "failed",
                     "path": str(save_path),
                 }
+                if not ok:
+                    item["reason"] = "download failed"
                 if ok and fmt == "markdown":
                     if download_images:
                         image_result = exporter.localize_images(
@@ -176,6 +185,8 @@ class ExportService:
                 "requested": len(selected),
                 "success": len([x for x in exported if x["status"] in {"ok", "empty", "directory"}]),
                 "skipped": len([x for x in exported if x["status"] == "skipped"]),
+                "failed": len([x for x in exported if x["status"] == "failed"]),
+                "failed_items": [x for x in exported if x["status"] == "failed"],
                 "image_localization": image_summary,
                 "items": exported,
                 "stale_files": stale_files,
@@ -217,28 +228,40 @@ class ExportService:
         if all_docs == bool(node_values):
             raise ValueError("provide exactly one of all_docs or node_uuids")
 
-        id_results = [
-            self.run(
-                repo_id=repository_id,
-                fmt=fmt,
-                all_docs=all_docs,
-                node_uuids=node_values,
-                download_images=download_images,
-                incremental=incremental,
-            )
-            for repository_id in repo_id_values
-        ]
-        reference_results = [
-            self.run(
-                repo=repository_reference,
-                fmt=fmt,
-                all_docs=all_docs,
-                node_uuids=node_values,
-                download_images=download_images,
-                incremental=incremental,
-            )
-            for repository_reference in repository_values
-        ]
+        id_results = []
+        for repository_id in repo_id_values:
+            try:
+                id_results.append(
+                    self.run(
+                        repo_id=repository_id,
+                        fmt=fmt,
+                        all_docs=all_docs,
+                        node_uuids=node_values,
+                        download_images=download_images,
+                        incremental=incremental,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - batch keeps partial results
+                id_results.append(
+                    {"status": "failed", "repo_id": repository_id, "error": str(exc)}
+                )
+        reference_results = []
+        for repository_reference in repository_values:
+            try:
+                reference_results.append(
+                    self.run(
+                        repo=repository_reference,
+                        fmt=fmt,
+                        all_docs=all_docs,
+                        node_uuids=node_values,
+                        download_images=download_images,
+                        incremental=incremental,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - batch keeps partial results
+                reference_results.append(
+                    {"status": "failed", "repo": repository_reference, "error": str(exc)}
+                )
         results = [*id_results, *reference_results]
         return {
             "count": len(results),

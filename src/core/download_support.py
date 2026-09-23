@@ -26,6 +26,7 @@ class ExportDownloadMixin:
     ) -> bool:
         """Download an export with bounded, credential-safe redirects."""
         if max_bytes <= 0 or not self._is_yuque_https_url(url):
+            print(f"❌ 下载地址非法，已跳过: url={url} save={save_path}")
             return False
 
         response = None
@@ -50,7 +51,10 @@ class ExportDownloadMixin:
                 return False
 
             if response.status_code != 200:
-                print(f"❌ 下载请求失败: {response.status_code}")
+                print(
+                    f"❌ 下载请求失败: url={url} save={save_path} "
+                    f"status={response.status_code}"
+                )
                 return False
             return self._save_download_response(
                 response,
@@ -59,8 +63,8 @@ class ExportDownloadMixin:
                 max_bytes,
                 deadline,
             )
-        except (OSError, requests.RequestException, socket.error, ValueError):
-            print("❌ 下载请求失败")
+        except (OSError, requests.RequestException, socket.error, ValueError) as exc:
+            print(f"❌ 下载请求失败: url={url} save={save_path} err={exc}")
             return False
         finally:
             if response is not None and hasattr(response, "close"):
